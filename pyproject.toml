@@ -24,3 +24,6 @@ dev = [
 
 [project.scripts]
 bebop = "bebop.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bebop"]
