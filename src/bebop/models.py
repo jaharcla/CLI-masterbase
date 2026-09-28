@@ -80,10 +80,7 @@ class GoalPlan(BaseModel):
                     f"Task {task.id} has unknown dependencies: {sorted(missing)}"
                 )
 
-        graph = {
-            task.id: set(task.dependencies)
-            for task in self.tasks
-        }
+        graph = {task.id: set(task.dependencies) for task in self.tasks}
         try:
             TopologicalSorter(graph).prepare()
         except CycleError as exc:
@@ -248,3 +245,5 @@ class GoalOutcome(BaseModel):
     integration_session: WorkerSession | None = None
     integration_commit_sha: str | None = None
     integration_verification: VerificationResult | None = None
+    integration_conflict_repairs: int = 0
+    integration_escalations: int = 0
