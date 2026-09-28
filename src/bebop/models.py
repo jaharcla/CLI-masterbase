@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from graphlib import CycleError, TopologicalSorter
 from typing import Any
 
 from pydantic import AliasChoices, BaseModel, Field, model_validator
@@ -79,25 +80,14 @@ class GoalPlan(BaseModel):
                     f"Task {task.id} has unknown dependencies: {sorted(missing)}"
                 )
 
-        indegree = {task_id: 0 for task_id in ids}
-        children: dict[str, list[str]] = {task_id: [] for task_id in ids}
-        for task in self.tasks:
-            for dependency in task.dependencies:
-                indegree[task.id] += 1
-                children[dependency].append(task.id)
-
-        queue = [task_id for task_id, degree in indegree.items() if degree == 0]
-        seen = 0
-        while queue:
-            current = queue.pop()
-            seen += 1
-            for child in children[current]:
-                indegree[child] -= 1
-                if indegree[child] == 0:
-                    queue.append(child)
-
-        if seen != len(ids):
-            raise ValueError("Goal task graph contains a dependency cycle")
+        graph = {
+            task.id: set(task.dependencies)
+            for task in self.tasks
+        }
+        try:
+            TopologicalSorter(graph).prepare()
+        except CycleError as exc:
+            raise ValueError("Goal task graph contains a dependency cycle") from exc
 
         return self
 
@@ -184,6 +174,7 @@ class VerificationResult(BaseModel):
     evidence: list[str] = Field(default_factory=list)
     failures: list[str] = Field(default_factory=list)
     protected_path_changes: list[str] = Field(default_factory=list)
+    out_of_scope_changes: list[str] = Field(default_factory=list)
     acceptance_pending: bool = False
     command_results: list[CommandResult] = Field(default_factory=list)
 
