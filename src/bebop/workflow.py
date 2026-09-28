@@ -580,15 +580,23 @@ def execute_goal(plan_payload: dict) -> dict:
         commits = ordered_verified_commits(waves, outcomes)
         if commits:
             integration_task = TaskCapsule(
-                id="integration",
+                id="__bebop_integration__",
                 title="Integrate verified goal",
                 objective=plan.goal,
                 project=plan.project,
                 run_id=plan.id,
             )
-            integration_target = RouteTarget(
-                harness="opencode",
-                reason="AO-owned goal integration workspace",
+            successful_route = next(
+                outcome.route
+                for wave in waves
+                for task_id in wave
+                if (
+                    (outcome := outcomes.get(task_id)) is not None
+                    and outcome.state in SUCCESS_STATES
+                )
+            )
+            integration_target = successful_route.model_copy(
+                update={"reason": "AO-owned goal integration workspace"}
             )
             project = AOProject.model_validate(resolve_project_step(plan.project))
             integration_session = WorkerSession.model_validate(
