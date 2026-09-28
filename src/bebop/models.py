@@ -245,3 +245,6 @@ class GoalOutcome(BaseModel):
     task_outcomes: dict[str, TaskOutcome] = Field(default_factory=dict)
     blocked_tasks: list[str] = Field(default_factory=list)
     errors: dict[str, str] = Field(default_factory=dict)
+    integration_session: WorkerSession | None = None
+    integration_commit_sha: str | None = None
+    integration_verification: VerificationResult | None = None
