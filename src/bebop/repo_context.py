@@ -48,7 +48,7 @@ def build_repo_context(
     pattern = goal_search_pattern(goal)
     try:
         completed = subprocess.run(
-            [executable, "--no-color", pattern],
+            [executable, "--no-color", "-i", pattern],
             cwd=root,
             capture_output=True,
             text=True,
