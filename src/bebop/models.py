@@ -80,12 +80,21 @@ class SessionObservation(BaseModel):
     raw_session: dict[str, Any] = Field(default_factory=dict)
 
 
+class CommandResult(BaseModel):
+    command: str
+    exit_code: int | None = None
+    passed: bool
+    output: str = ""
+    duration_seconds: float = 0.0
+
+
 class VerificationResult(BaseModel):
     passed: bool
     evidence: list[str] = Field(default_factory=list)
     failures: list[str] = Field(default_factory=list)
     protected_path_changes: list[str] = Field(default_factory=list)
     acceptance_pending: bool = False
+    command_results: list[CommandResult] = Field(default_factory=list)
 
 
 class TaskOutcome(BaseModel):
@@ -95,3 +104,4 @@ class TaskOutcome(BaseModel):
     session: WorkerSession
     observation: SessionObservation
     verification: VerificationResult
+    repair_attempts: int = 0
