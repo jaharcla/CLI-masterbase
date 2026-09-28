@@ -150,7 +150,22 @@ class AOClient:
             self._client.get(f"/sessions/{escaped}/workspace/files"),
             "AO workspace file list",
         )
-        paths: list[str] = []
+
+        # Prefer AO's current git-state sections. Committed-since-base files may
+        # include verified dependency cherry-picks and must not be treated as
+        # edits made by the current task.
+        sections = body.get("sections") or {}
+        if sections:
+            paths: list[str] = []
+            for key in ("staged", "unstaged", "untracked"):
+                for file in sections.get(key, []) or []:
+                    path = str(file.get("path", ""))
+                    if path:
+                        paths.append(path)
+            return sorted(set(paths))
+
+        # Compatibility fallback for older AO builds that do not expose sections.
+        paths = []
         for file in body.get("files", []):
             path = str(file.get("path", ""))
             status = str(file.get("status", ""))
