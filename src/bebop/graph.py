@@ -41,3 +41,26 @@ def dependency_lineage(
                 seen.add(commit)
 
     return commits
+
+
+def ordered_verified_commits(
+    waves: list[list[str]],
+    outcomes: Mapping[str, object],
+) -> list[str]:
+    """Return canonical task commits in dependency-safe wave order."""
+    result: list[str] = []
+    seen: set[str] = set()
+
+    for wave in waves:
+        for task_id in wave:
+            outcome = outcomes.get(task_id)
+            if outcome is None:
+                continue
+            state = getattr(outcome, "state", "")
+            commit_sha = getattr(outcome, "commit_sha", None)
+            if state not in SUCCESS_STATES or not commit_sha or commit_sha in seen:
+                continue
+            seen.add(commit_sha)
+            result.append(commit_sha)
+
+    return result
