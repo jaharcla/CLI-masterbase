@@ -5,6 +5,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 
@@ -51,6 +52,11 @@ class AOClient:
 
     def close(self) -> None:
         self._client.close()
+
+    def mux_url(self) -> str:
+        parsed = urlsplit(self.base_url)
+        scheme = "wss" if parsed.scheme == "https" else "ws"
+        return urlunsplit((scheme, parsed.netloc, "/mux", "", ""))
 
     def list_projects(self) -> list[AOProject]:
         body = self._json(self._client.get("/projects"), "AO project list")
@@ -144,19 +150,48 @@ class AOClient:
                 paths.append(path)
         return sorted(set(paths))
 
+    def open_shell_terminal(
+        self,
+        session_id: str,
+        *,
+        shell: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"sessionId": session_id}
+        if shell:
+            payload["shell"] = shell
+
+        body = self._json(
+            self._client.post("/shell-terminals", json=payload),
+            "AO shell terminal open",
+        )
+        terminal = dict(body.get("shellTerminal", body))
+        if not terminal.get("handleId"):
+            raise AOError("AO shell terminal response did not include handleId")
+        return terminal
+
+    def close_shell_terminal(self, handle_id: str) -> None:
+        response = self._client.delete(f"/shell-terminals/{quote(handle_id, safe='')}")
+        if response.status_code == 404:
+            return
+        self._json(response, "AO shell terminal close", allow_empty=True)
+
     def observe_until_settled(
         self,
         session_id: str,
         *,
         timeout_seconds: float = 900.0,
         poll_seconds: float = 2.0,
+        after_activity_at: str | None = None,
+        require_progress: bool = False,
     ) -> SessionObservation:
         deadline = time.monotonic() + timeout_seconds
+        progressed = not require_progress
 
         while True:
             session = self.get_session(session_id)
             activity = session.get("activity") or {}
             activity_state = str(activity.get("state", ""))
+            activity_at = str(activity.get("lastActivityAt", ""))
             provision_state = str(session.get("provisionState", "") or "ready")
             terminated = bool(session.get("isTerminated", False))
 
@@ -166,13 +201,19 @@ class AOClient:
                     f"{session.get('provisionError', 'unknown error')}"
                 )
 
+            if require_progress and (
+                activity_state == "active"
+                or (activity_at and activity_at != (after_activity_at or ""))
+            ):
+                progressed = True
+
             settled = terminated or activity_state in {
                 "idle",
                 "waiting_input",
                 "blocked",
                 "exited",
             }
-            if settled:
+            if settled and progressed:
                 return SessionObservation(
                     session_id=session_id,
                     status=str(session.get("status", "")),
@@ -184,7 +225,8 @@ class AOClient:
                 )
 
             if time.monotonic() >= deadline:
-                raise AOError(f"Timed out waiting for AO session {session_id}")
+                detail = " after feedback" if require_progress else ""
+                raise AOError(f"Timed out waiting for AO session {session_id}{detail}")
 
             time.sleep(poll_seconds)
 
