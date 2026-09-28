@@ -92,6 +92,49 @@ class GoalPlan(BaseModel):
         return self
 
 
+class PlannedTask(BaseModel):
+    id: str = Field(pattern=r"^[A-Za-z0-9._-]+$")
+    title: str
+    objective: str
+    dependencies: list[str] = Field(default_factory=list)
+    relevant_files: list[str] = Field(default_factory=list)
+    allowed_paths: list[str] = Field(default_factory=list)
+    protected_paths: list[str] = Field(default_factory=list)
+    acceptance_commands: list[str] = Field(default_factory=list)
+
+
+class PlanDraft(BaseModel):
+    tasks: list[PlannedTask]
+
+    @model_validator(mode="after")
+    def validate_graph(self) -> "PlanDraft":
+        if not self.tasks:
+            raise ValueError("Plan must contain at least one task")
+
+        ids = [task.id for task in self.tasks]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Planned task IDs must be unique")
+
+        known = set(ids)
+        for task in self.tasks:
+            if task.id in task.dependencies:
+                raise ValueError(f"Task {task.id} cannot depend on itself")
+            missing = set(task.dependencies) - known
+            if missing:
+                raise ValueError(
+                    f"Task {task.id} has unknown dependencies: {sorted(missing)}"
+                )
+
+        try:
+            TopologicalSorter(
+                {task.id: set(task.dependencies) for task in self.tasks}
+            ).prepare()
+        except CycleError as exc:
+            raise ValueError("Planned task graph contains a dependency cycle") from exc
+
+        return self
+
+
 class RouteTarget(BaseModel):
     harness: str
     provider: str | None = None
