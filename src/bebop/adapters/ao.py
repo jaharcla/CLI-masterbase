@@ -173,6 +173,20 @@ class AOClient:
                 paths.append(path)
         return sorted(set(paths))
 
+    def workspace_paths(self, session_id: str) -> list[str]:
+        escaped = quote(session_id, safe="")
+        body = self._json(
+            self._client.get(f"/sessions/{escaped}/workspace/files"),
+            "AO workspace file list",
+        )
+        paths: list[str] = []
+        for file in body.get("files", []):
+            path = str(file.get("path", ""))
+            status = str(file.get("status", ""))
+            if path and status != "deleted":
+                paths.append(path.replace("\\", "/"))
+        return sorted(set(paths))
+
     def list_agent_switches(self, session_id: str) -> list[AgentSwitch]:
         escaped = quote(session_id, safe="")
         body = self._json(
