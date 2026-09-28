@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 
 class WorkClass(StrEnum):
@@ -34,15 +34,72 @@ class Classification(BaseModel):
 
 
 class TaskCapsule(BaseModel):
-    id: str
+    id: str = Field(pattern=r"^[A-Za-z0-9._-]+$")
     title: str
     objective: str
     project: str = Field(validation_alias=AliasChoices("project", "project_id"))
+    run_id: str | None = None
+    dependencies: list[str] = Field(default_factory=list)
     relevant_files: list[str] = Field(default_factory=list)
     known_decisions: list[str] = Field(default_factory=list)
     allowed_paths: list[str] = Field(default_factory=list)
     protected_paths: list[str] = Field(default_factory=list)
     acceptance_commands: list[str] = Field(default_factory=list)
+
+
+class GoalPlan(BaseModel):
+    id: str = Field(pattern=r"^[A-Za-z0-9._-]+$")
+    goal: str
+    project: str
+    tasks: list[TaskCapsule]
+
+    @model_validator(mode="after")
+    def validate_graph(self) -> "GoalPlan":
+        if not self.tasks:
+            raise ValueError("Goal plan must contain at least one task")
+
+        ids = [task.id for task in self.tasks]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Task IDs must be unique")
+
+        known = set(ids)
+        for task in self.tasks:
+            if task.project != self.project:
+                raise ValueError(
+                    f"Task {task.id} uses project {task.project!r}; "
+                    f"goal project is {self.project!r}"
+                )
+            if task.id in task.dependencies:
+                raise ValueError(f"Task {task.id} cannot depend on itself")
+            if len(task.dependencies) != len(set(task.dependencies)):
+                raise ValueError(f"Task {task.id} has duplicate dependencies")
+            missing = set(task.dependencies) - known
+            if missing:
+                raise ValueError(
+                    f"Task {task.id} has unknown dependencies: {sorted(missing)}"
+                )
+
+        indegree = {task_id: 0 for task_id in ids}
+        children: dict[str, list[str]] = {task_id: [] for task_id in ids}
+        for task in self.tasks:
+            for dependency in task.dependencies:
+                indegree[task.id] += 1
+                children[dependency].append(task.id)
+
+        queue = [task_id for task_id, degree in indegree.items() if degree == 0]
+        seen = 0
+        while queue:
+            current = queue.pop()
+            seen += 1
+            for child in children[current]:
+                indegree[child] -= 1
+                if indegree[child] == 0:
+                    queue.append(child)
+
+        if seen != len(ids):
+            raise ValueError("Goal task graph contains a dependency cycle")
+
+        return self
 
 
 class RouteTarget(BaseModel):
@@ -142,3 +199,14 @@ class TaskOutcome(BaseModel):
     escalation_attempts: int = 0
     escalated_route: RouteTarget | None = None
     agent_switch: AgentSwitch | None = None
+    inherited_commits: list[str] = Field(default_factory=list)
+    commit_sha: str | None = None
+
+
+class GoalOutcome(BaseModel):
+    state: str
+    goal_id: str
+    goal: str
+    waves: list[list[str]] = Field(default_factory=list)
+    task_outcomes: dict[str, TaskOutcome] = Field(default_factory=dict)
+    blocked_tasks: list[str] = Field(default_factory=list)
