@@ -1,37 +1,47 @@
 # Bebop Code Hub
 
-Bebop is a local-first coding orchestrator that decomposes a development goal into bounded tasks, routes each task to the cheapest capable worker, verifies the result independently, and escalates only when evidence requires stronger reasoning.
+Bebop is a thin routing and verification layer for existing coding-agent infrastructure.
 
-## Core principle
+It does **not** reimplement worktrees, agent process supervision, durable session state, or coding-agent harnesses.
 
-> Use expensive intelligence only where it materially improves the outcome; let inexpensive or unlimited workers handle everything else.
+## Stack
 
-## MVP
+- **Agent Orchestrator**: workers, sessions, worktrees, Codex/Copilot/OpenCode execution
+- **OpenCode**: Groq and Ollama worker harness
+- **DBOS**: durable workflows, recovery, queues/concurrency
+- **Bebop**: decomposition, classification, routing, verification, escalation
 
-The first implementation targets:
+## Current vertical slice
 
 ```text
-user goal
-  -> task decomposition
-  -> dependency DAG
-  -> task classification
-  -> routing
-  -> isolated git worktree
-  -> worker execution
-  -> objective verification
-  -> retry / escalation
-  -> integration
+TaskCapsule
+   -> deterministic baseline classifier
+   -> routing policy
+   -> DBOS durable workflow
+   -> POST /api/v1/sessions to Agent Orchestrator
 ```
 
-Initial workers:
+The current code intentionally stops before implementing a second process manager or scheduler.
 
-- Ollama through OpenCode
-- Groq through OpenCode
-- Codex CLI for protected reasoning tasks
-- Local verification commands
+## Example task
 
-Bebop owns planning, routing, task state, verification, escalation, and merge policy. External orchestrators remain optional execution backends.
+```json
+{
+  "id": "T001",
+  "title": "Implement parser",
+  "objective": "Implement the parser without changing tests.",
+  "project_id": "your-ao-project-id",
+  "relevant_files": ["src/parser.py"],
+  "protected_paths": ["tests/**"],
+  "acceptance_commands": ["pytest tests/test_parser.py"]
+}
+```
 
-## Status
+Run with:
 
-Repository bootstrap in progress.
+```powershell
+pip install -e ".[dev]"
+bebop run task.json
+```
+
+Agent Orchestrator must already be installed/running with the target project registered.
