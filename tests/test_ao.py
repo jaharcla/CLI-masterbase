@@ -186,3 +186,39 @@ def test_switch_agent_rejects_non_native_target():
             )
     finally:
         client.close()
+
+
+@respx.mock
+def test_changed_paths_ignore_only_known_dependency_commits():
+    respx.get("http://ao.test/api/v1/sessions/s-1/workspace/files").mock(
+        return_value=Response(
+            200,
+            json={
+                "sections": {
+                    "staged": [{"path": "src/current.py"}],
+                    "unstaged": [],
+                    "untracked": [],
+                    "committed": [],
+                },
+                "commits": [
+                    {
+                        "sha": "a" * 40,
+                        "files": [{"path": "src/inherited.py"}],
+                    },
+                    {
+                        "sha": "b" * 40,
+                        "files": [{"path": "tests/changed_by_worker.py"}],
+                    },
+                ],
+                "files": [],
+            },
+        )
+    )
+
+    client = AOClient("http://ao.test/api/v1")
+    try:
+        changed = client.changed_paths("s-1", ignored_commits={"a" * 40})
+    finally:
+        client.close()
+
+    assert changed == ["src/current.py", "tests/changed_by_worker.py"]
