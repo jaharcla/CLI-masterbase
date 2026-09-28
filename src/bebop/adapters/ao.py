@@ -144,34 +144,50 @@ class AOClient:
         )
         return dict(body.get("session", body))
 
-    def changed_paths(self, session_id: str) -> list[str]:
+    def changed_paths(
+        self,
+        session_id: str,
+        *,
+        ignored_commits: set[str] | None = None,
+    ) -> list[str]:
         escaped = quote(session_id, safe="")
         body = self._json(
             self._client.get(f"/sessions/{escaped}/workspace/files"),
             "AO workspace file list",
         )
 
-        # Prefer AO's current git-state sections. Committed-since-base files may
-        # include verified dependency cherry-picks and must not be treated as
-        # edits made by the current task.
-        sections = body.get("sections") or {}
-        if sections:
-            paths: list[str] = []
-            for key in ("staged", "unstaged", "untracked"):
-                for file in sections.get(key, []) or []:
-                    path = str(file.get("path", ""))
-                    if path:
-                        paths.append(path)
-            return sorted(set(paths))
+        ignored = {sha.lower() for sha in (ignored_commits or set())}
+        paths: list[str] = []
 
-        # Compatibility fallback for older AO builds that do not expose sections.
-        paths = []
+        # Current uncommitted state is always part of this task.
+        sections = body.get("sections") or {}
+        for key in ("staged", "unstaged", "untracked"):
+            for file in sections.get(key, []) or []:
+                path = str(file.get("path", ""))
+                if path:
+                    paths.append(path)
+
+        # Committed-since-base changes are included unless the commit is a known
+        # verified dependency imported before this task began.
+        for commit in body.get("commits", []) or []:
+            sha = str(commit.get("sha", "")).lower()
+            if sha and sha in ignored:
+                continue
+            for file in commit.get("files", []) or []:
+                path = str(file.get("path", ""))
+                if path:
+                    paths.append(path)
+
+        if sections or body.get("commits") is not None:
+            return sorted({path.replace("\\", "/") for path in paths})
+
+        # Compatibility fallback for older AO builds.
         for file in body.get("files", []):
             path = str(file.get("path", ""))
             status = str(file.get("status", ""))
             if path and status != "unmodified":
                 paths.append(path)
-        return sorted(set(paths))
+        return sorted({path.replace("\\", "/") for path in paths})
 
     def workspace_paths(self, session_id: str) -> list[str]:
         escaped = quote(session_id, safe="")
@@ -283,6 +299,7 @@ class AOClient:
         poll_seconds: float = 2.0,
         after_activity_at: str | None = None,
         require_progress: bool = False,
+        ignored_commits: set[str] | None = None,
     ) -> SessionObservation:
         deadline = time.monotonic() + timeout_seconds
         progressed = not require_progress
@@ -320,7 +337,7 @@ class AOClient:
                     activity_state=activity_state,
                     provision_state=provision_state,
                     is_terminated=terminated,
-                    changed_paths=self.changed_paths(session_id),
+                    changed_paths=self.changed_paths(session_id, ignored_commits=ignored_commits),
                     raw_session=session,
                 )
 
