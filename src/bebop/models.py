@@ -70,6 +70,40 @@ class WorkerSession(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class AgentSwitch(BaseModel):
+    id: str
+    session_id: str = Field(validation_alias=AliasChoices("session_id", "sessionId"))
+    from_harness: str = Field(
+        default="",
+        validation_alias=AliasChoices("from_harness", "fromHarness"),
+    )
+    target_harness: str = Field(
+        default="",
+        validation_alias=AliasChoices("target_harness", "targetHarness"),
+    )
+    target_start_mode: str = Field(
+        default="",
+        validation_alias=AliasChoices("target_start_mode", "targetStartMode"),
+    )
+    state: str
+    agent_handoff_status: str = Field(
+        default="",
+        validation_alias=AliasChoices("agent_handoff_status", "agentHandoffStatus"),
+    )
+    semantic_handoff_included: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "semantic_handoff_included",
+            "semanticHandoffIncluded",
+        ),
+    )
+    error_code: str = Field(
+        default="",
+        validation_alias=AliasChoices("error_code", "errorCode"),
+    )
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
 class SessionObservation(BaseModel):
     session_id: str
     status: str = ""
@@ -105,3 +139,6 @@ class TaskOutcome(BaseModel):
     observation: SessionObservation
     verification: VerificationResult
     repair_attempts: int = 0
+    escalation_attempts: int = 0
+    escalated_route: RouteTarget | None = None
+    agent_switch: AgentSwitch | None = None
