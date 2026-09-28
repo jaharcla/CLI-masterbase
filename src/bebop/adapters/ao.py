@@ -69,6 +69,27 @@ class AOClient:
         body = self._json(self._client.get("/projects"), "AO project list")
         return [AOProject.model_validate(project) for project in body.get("projects", [])]
 
+    def register_project(
+        self,
+        path: str,
+        *,
+        name: str | None = None,
+    ) -> AOProject:
+        payload: dict[str, Any] = {"path": path}
+        if name:
+            payload["name"] = name
+        body = self._json(
+            self._client.post("/projects", json=payload),
+            "AO project registration",
+        )
+        return AOProject.model_validate(body.get("project", body))
+
+    def remove_project(self, project_id: str) -> None:
+        self._json(
+            self._client.delete(f"/projects/{quote(project_id, safe='')}"),
+            "AO project removal",
+        )
+
     def resolve_project(self, selector: str) -> AOProject:
         projects = self.list_projects()
         needle = selector.strip()

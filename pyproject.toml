@@ -15,6 +15,7 @@ dependencies = [
   "pydantic-ai-slim[groq]>=2.12,<3",
   "grep-ast>=0.9,<1",
   "pathspec>=0.12,<1",
+  "python-dotenv>=1,<2",
   "typer>=0.12,<1",
   "websockets>=17,<18",
 ]

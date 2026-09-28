@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from uuid import uuid4
 from pathlib import Path
 
 import typer
@@ -54,7 +55,7 @@ def run(task_file: Path) -> None:
     task = TaskCapsule.model_validate(payload)
 
     init_dbos()
-    result = execute_task(task.model_dump())
+    result = execute_task(task.model_copy(update={"run_id": uuid4().hex}).model_dump())
     typer.echo(json.dumps(result, indent=2))
 
 
@@ -65,7 +66,7 @@ def run_plan(plan_file: Path) -> None:
     plan = GoalPlan.model_validate(payload)
 
     init_dbos()
-    result = execute_goal(plan.model_dump())
+    result = execute_goal(plan.model_dump(), uuid4().hex)
     typer.echo(json.dumps(result, indent=2))
 
 
@@ -105,17 +106,16 @@ def goal(
     """Plan one goal, then execute its durable dependency graph."""
     goal_plan = _create_plan(goal, project)
     init_dbos()
-    result = execute_goal(goal_plan.model_dump())
+    result = execute_goal(goal_plan.model_dump(), uuid4().hex)
     typer.echo(json.dumps(result, indent=2))
 
 
 @app.command("smoke-test")
 def smoke_test(
-    project: str | None = typer.Option(None, "--project", "-p", help="AO project selector. Defaults to the disposable fixture path."),
 ) -> None:
     """Run an opt-in real-stack edit/verify/integrate smoke test."""
     try:
-        result = run_smoke_test(project)
+        result = run_smoke_test()
     except Exception as exc:
         typer.echo(f"FAIL smoke-test: {exc}", err=True)
         raise typer.Exit(1) from exc

@@ -1,7 +1,7 @@
 import respx
 from httpx import Response
 
-from bebop.doctor import _ollama_check, _opencode_groq_readiness
+from bebop.doctor import _ao_route_check, _ollama_check, _opencode_groq_readiness
 
 
 class _Socket:
@@ -32,3 +32,14 @@ def test_groq_readiness_requires_final_model(monkeypatch):
 
     assert result.ok is False
     assert "groq/openai/gpt-oss-120b" in result.detail
+
+
+def test_ao_route_check_labels_preflight_without_claiming_worker_proof():
+    class Client:
+        def list_sessions(self, project_id):
+            return []
+
+    result = _ao_route_check("AO/codex", Client(), "codex", [type("P", (), {"id": "p1"})()])
+
+    assert result.ok is True
+    assert "real worker execution not proven" in result.detail

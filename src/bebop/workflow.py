@@ -666,9 +666,18 @@ def execute_task(
 
 
 @DBOS.workflow()
-def execute_goal(plan_payload: dict) -> dict:
+def execute_goal(plan_payload: dict, execution_id: str | None = None) -> dict:
     """Execute a validated goal DAG and compose verified work in one AO workspace."""
     plan = GoalPlan.model_validate(plan_payload)
+    execution_id = execution_id or plan.id
+    plan = plan.model_copy(
+        update={
+            "tasks": [
+                task.model_copy(update={"run_id": execution_id})
+                for task in plan.tasks
+            ]
+        }
+    )
     task_by_id = {task.id: task for task in plan.tasks}
     sorter = build_sorter(plan)
 
@@ -686,7 +695,7 @@ def execute_goal(plan_payload: dict) -> dict:
         handles: list[tuple[str, list[str], object]] = []
 
         for task_id in ready:
-            task = task_by_id[task_id].model_copy(update={"run_id": plan.id})
+            task = task_by_id[task_id].model_copy(update={"run_id": execution_id})
             inherited = dependency_lineage(task_id, plan, lineages)
             handle = DBOS.enqueue_workflow(
                 TASK_QUEUE,
@@ -742,7 +751,7 @@ def execute_goal(plan_payload: dict) -> dict:
                 title="Integrate verified goal",
                 objective=plan.goal,
                 project=plan.project,
-                run_id=plan.id,
+                run_id=execution_id,
             )
             successful_route = next(
                 outcome.route

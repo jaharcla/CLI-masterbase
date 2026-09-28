@@ -41,7 +41,7 @@ def plan_goal(
 ) -> GoalPlan:
     model_name = model or os.getenv(
         "BEBOP_PLANNER_MODEL",
-        "groq:llama-3.3-70b-versatile",
+        "groq:openai/gpt-oss-120b",
     )
 
     agent = Agent(

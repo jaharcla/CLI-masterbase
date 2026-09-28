@@ -30,6 +30,22 @@ def test_materialize_plan_forces_project_and_stable_goal_id():
     assert first.tasks[1].dependencies == ["T001"]
 
 
+def test_materialize_plan_does_not_assign_execution_identity():
+    draft = PlanDraft(
+        tasks=[
+            PlannedTask(
+                id="T001",
+                title="Implement change",
+                objective="Make the change",
+            )
+        ]
+    )
+
+    plan = materialize_plan("Make the change", "courseai", draft)
+    assert plan.tasks[0].run_id is None
+    assert plan.tasks[0].run_id is None
+
+
 def test_goal_search_pattern_removes_generic_words():
     pattern = goal_search_pattern(
         "Finish the CourseAI transcript pipeline and improve course detection"

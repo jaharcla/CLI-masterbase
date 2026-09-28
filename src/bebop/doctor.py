@@ -138,12 +138,14 @@ def _ao_route_check(name: str, client: AOClient | None, harness: str, projects: 
     if not projects:
         return Check(name, False, "no AO projects available", f"{name} unavailable")
     try:
-        sessions = client.list_sessions(getattr(projects[0], "id", None))
+        client.list_sessions(getattr(projects[0], "id", None))
     except Exception as exc:
         return Check(name, False, _short(exc), f"{name} unavailable")
-    seen = any(str(session.get("harness", "")).casefold() == harness for session in sessions)
-    detail = "route can be requested; no live session found" if not seen else "live session found"
-    return Check(name, True, detail)
+    return Check(
+        name,
+        True,
+        f"AO reachable for {harness}; real worker execution not proven by doctor",
+    )
 
 
 def _ao_harness_available(client: AOClient | None, harness: str, projects: list[object]) -> tuple[bool, str]:
@@ -279,7 +281,7 @@ def _ollama_check(configured_model: str | None = None) -> Check:
 
 
 def _planner_check() -> Check:
-    model = os.getenv("BEBOP_PLANNER_MODEL", "groq:llama-3.3-70b-versatile")
+    model = os.getenv("BEBOP_PLANNER_MODEL", "groq:openai/gpt-oss-120b")
     if model.startswith("groq:") and not os.getenv("GROQ_API_KEY"):
         return Check("planner model/configuration", False, model, "Planner Groq API key missing")
     return Check("planner model/configuration", True, model)

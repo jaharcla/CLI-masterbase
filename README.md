@@ -77,7 +77,7 @@ Copy-Item .env.example .env
 notepad .env
 bebop doctor
 bebop plan "Add a small tested feature" --project <AO project id/name/path>
-bebop smoke-test --project <AO project id/name/path>
+bebop smoke-test
 bebop goal "Implement a small testable feature in this project" --project <AO project id/name/path>
 ```
 
@@ -102,8 +102,12 @@ bebop doctor
 Local smoke test:
 
 ```powershell
-bebop smoke-test --project <AO project id/name/path>
+bebop smoke-test
 ```
+
+The smoke test creates, registers, edits, verifies, and removes its own disposable
+AO project. It never accepts a project selector, so it cannot mutate an unrelated
+repository.
 
 List AO projects:
 
