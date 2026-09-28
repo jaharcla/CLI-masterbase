@@ -8,7 +8,7 @@ from bebop.adapters.ao import AOClient, AOError, render_task_capsule
 from bebop.adapters.ao_terminal import AOTerminalVerifier
 from bebop.adapters.git_handoff import GitHandoff
 from bebop.classifier import classify
-from bebop.graph import SUCCESS_STATES, blocked_tasks, dependency_lineage, ready_tasks
+from bebop.graph import SUCCESS_STATES, build_sorter, dependency_lineage
 from bebop.models import (
     AOProject,
     AgentSwitch,
@@ -437,25 +437,19 @@ def execute_goal(plan_payload: dict) -> dict:
     """Execute a validated goal DAG in dependency-safe parallel waves."""
     plan = GoalPlan.model_validate(plan_payload)
     task_by_id = {task.id: task for task in plan.tasks}
+    sorter = build_sorter(plan)
 
-    pending = set(task_by_id)
     outcomes: dict[str, TaskOutcome] = {}
-    states: dict[str, str] = {}
-    failed_ids: set[str] = set()
     lineages: dict[str, list[str]] = {}
     waves: list[list[str]] = []
-    blocked: set[str] = set()
     errors: dict[str, str] = {}
 
-    while pending:
-        newly_blocked = blocked_tasks(plan, states, failed_ids, pending)
-        for task_id in newly_blocked:
-            blocked.add(task_id)
-            pending.discard(task_id)
-
-        ready = ready_tasks(plan, states, pending)
+    while sorter.is_active():
+        ready = sorted(sorter.get_ready())
         if not ready:
-            blocked.update(pending)
+            # Nodes whose failed prerequisites were never marked done remain
+            # blocked inside graphlib. Independent branches have already had a
+            # chance to become ready on previous iterations.
             break
 
         waves.append(ready)
@@ -472,33 +466,34 @@ def execute_goal(plan_payload: dict) -> dict:
             )
             handles.append((task_id, inherited, handle))
 
-        # Handles execute concurrently on the DBOS queue; collecting them here
-        # forms a durable barrier before the next dependency wave.
+        # DBOS executes the wave concurrently subject to queue concurrency.
+        # Successful nodes are marked done in graphlib, unlocking only their
+        # dependency-safe descendants.
         for task_id, inherited, handle in handles:
-            pending.discard(task_id)
             try:
                 outcome = TaskOutcome.model_validate(handle.get_result())
             except Exception as exc:
-                failed_ids.add(task_id)
                 errors[task_id] = str(exc)
                 continue
 
             outcomes[task_id] = outcome
-            states[task_id] = outcome.state
+            if outcome.state not in SUCCESS_STATES:
+                continue
 
-            if outcome.state in SUCCESS_STATES:
-                lineage = list(inherited)
-                if outcome.commit_sha and outcome.commit_sha not in lineage:
-                    lineage.append(outcome.commit_sha)
-                lineages[task_id] = lineage
-            else:
-                failed_ids.add(task_id)
+            lineage = list(inherited)
+            if outcome.commit_sha and outcome.commit_sha not in lineage:
+                lineage.append(outcome.commit_sha)
+            lineages[task_id] = lineage
+            sorter.done(task_id)
 
+    executed_ids = set(outcomes) | set(errors)
+    blocked = sorted(set(task_by_id) - executed_ids)
     non_success = [
         task_id
         for task_id, outcome in outcomes.items()
         if outcome.state not in SUCCESS_STATES
     ]
+
     if not blocked and not errors and not non_success and len(outcomes) == len(plan.tasks):
         state = "verified"
     elif any(
@@ -515,6 +510,6 @@ def execute_goal(plan_payload: dict) -> dict:
         goal=plan.goal,
         waves=waves,
         task_outcomes=outcomes,
-        blocked_tasks=sorted(blocked),
+        blocked_tasks=blocked,
         errors=errors,
     ).model_dump()
