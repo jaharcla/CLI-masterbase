@@ -1,35 +1,54 @@
 # Bebop Code Hub
 
-Bebop is a thin routing and verification layer for existing coding-agent infrastructure.
+Bebop is a thin routing, verification, and escalation layer for existing coding-agent infrastructure.
 
 It does **not** reimplement worktrees, agent process supervision, durable session state, or coding-agent harnesses.
 
 ## Stack
 
-- **Agent Orchestrator**: workers, sessions, worktrees, Codex/Copilot/OpenCode execution
+- **Agent Orchestrator**: workers, sessions, worktrees, Codex/Copilot/OpenCode execution, durable provider switching
 - **OpenCode**: Groq and Ollama worker harness
 - **DBOS**: durable workflows, recovery, queues/concurrency
-- **Bebop**: decomposition, classification, routing, verification, escalation
+- **Bebop**: decomposition, classification, routing, verification, repair policy, escalation
 
-## Current vertical slice
+## Current execution ladder
 
 ```text
 TaskCapsule
    -> classify
-   -> route
-   -> resolve AO project
-   -> durable DBOS workflow
-   -> spawn/recover AO worker
-   -> observe AO session
-   -> inspect AO workspace changes
-   -> enforce protected-path policy
-   -> open AO session-scoped shell
-   -> run acceptance commands in the AO worktree
-   -> capture exit code + output
-   -> PASS or send failure evidence back to the same worker
-   -> re-observe + re-verify once
-   -> verified / needs_escalation
+   -> initial route
+
+Mechanical/Routine
+   -> OpenCode / Ollama
+
+Engineering
+   -> OpenCode / Groq
+
+Reasoning/Critical
+   -> Codex
+
+worker finishes
+   -> inspect AO workspace
+   -> reject protected-path changes
+   -> run acceptance commands in AO session worktree
+   -> PASS => verified
+   -> FAIL => send concrete evidence to same worker once
+   -> re-verify
+   -> PASS => verified_after_repair
+   -> FAIL + current worker is OpenCode
+        -> AO durable switch-agent: same session/worktree -> Codex
+        -> send latest verification evidence
+        -> Codex repairs
+        -> re-verify
+        -> PASS => verified_after_escalation
+        -> FAIL => escalated_worker_failed
+   -> FAIL + current worker already Codex
+        -> strong_worker_failed
 ```
+
+The escalation step uses AO's own durable agent-switch saga, so Bebop does **not** create a second worktree or manually merge an escalation branch.
+
+## AO discovery
 
 Bebop discovers the running AO daemon through `~/.ao/running.json` unless `AO_BASE_URL` is set.
 
@@ -85,10 +104,22 @@ Bebop:
 
 A worker saying "done" is never enough.
 
-When verification fails and the worker is safely idle/waiting, Bebop sends the concrete failure evidence back to the same worker and allows one repair cycle. If the second verification still fails, the task becomes `needs_escalation`.
+## Escalation model
+
+The first failure goes back to the same worker with exact machine evidence.
+
+If the same worker fails verification again:
+
+- OpenCode-backed work escalates in-place to **Codex** through `POST /api/v1/sessions/{sessionId}/switch-agent`.
+- Bebop uses a deterministic idempotency key so a DBOS replay resolves to the same switch saga instead of creating a duplicate provider handoff.
+- The AO session ID and worktree remain unchanged.
+- The new Codex controller receives the latest verification evidence and works on the existing files.
+- Bebop independently verifies the result again.
+
+AO's current public in-place switch target surface exposes Codex/Claude/fx, not a second model behind the same OpenCode harness. Because of that, Bebop does not pretend it can perform an in-place Ollama -> Groq provider swap on an existing OpenCode session.
 
 Agent Orchestrator must already be installed/running with the target project registered.
 
 ## CI
 
-The branch includes GitHub Actions CI that installs the package and runs the test suite.
+GitHub Actions installs the package and runs the test suite for pushes and pull requests.
