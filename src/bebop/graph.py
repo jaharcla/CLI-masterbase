@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from bebop.models import GoalPlan, TaskOutcome
+from bebop.models import GoalPlan
 
 
 SUCCESS_STATES = {
@@ -14,7 +14,7 @@ SUCCESS_STATES = {
 
 def ready_tasks(
     plan: GoalPlan,
-    completed: Mapping[str, TaskOutcome],
+    completed_states: Mapping[str, str],
     pending_ids: set[str],
 ) -> list[str]:
     ready: list[str] = []
@@ -22,8 +22,7 @@ def ready_tasks(
         if task.id not in pending_ids:
             continue
         if all(
-            dependency in completed
-            and completed[dependency].state in SUCCESS_STATES
+            completed_states.get(dependency) in SUCCESS_STATES
             for dependency in task.dependencies
         ):
             ready.append(task.id)
@@ -32,7 +31,8 @@ def ready_tasks(
 
 def blocked_tasks(
     plan: GoalPlan,
-    completed: Mapping[str, TaskOutcome],
+    completed_states: Mapping[str, str],
+    failed_ids: set[str],
     pending_ids: set[str],
 ) -> list[str]:
     blocked: list[str] = []
@@ -40,8 +40,11 @@ def blocked_tasks(
         if task.id not in pending_ids:
             continue
         if any(
-            dependency in completed
-            and completed[dependency].state not in SUCCESS_STATES
+            dependency in failed_ids
+            or (
+                dependency in completed_states
+                and completed_states[dependency] not in SUCCESS_STATES
+            )
             for dependency in task.dependencies
         ):
             blocked.append(task.id)
