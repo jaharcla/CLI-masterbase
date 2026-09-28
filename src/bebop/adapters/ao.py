@@ -107,12 +107,11 @@ class AOClient:
         task: TaskCapsule,
         target: RouteTarget,
         project_id: str,
+        *,
+        deliver_prompt: bool = True,
     ) -> WorkerSession:
         display_name = _display_name(task)
 
-        # DBOS may replay an incomplete external step after a crash. The local
-        # AO spawn route does not expose cloud-style create idempotency, so first
-        # recover a previously-created Bebop session by its stable display name.
         for existing in self.list_sessions(project_id):
             if existing.get("displayName") == display_name and not existing.get("isTerminated", False):
                 return self._worker_session(existing, task, target, project_id)
@@ -122,10 +121,11 @@ class AOClient:
             "kind": "worker",
             "harness": target.harness,
             "mode": target.mode,
-            "prompt": render_task_capsule(task),
             "displayName": display_name,
             "approvalMode": target.approval_mode,
         }
+        if deliver_prompt:
+            payload["prompt"] = render_task_capsule(task)
 
         model = self._resolve_model(target)
         if model:
@@ -380,7 +380,10 @@ class AOClient:
 
 
 def _display_name(task: TaskCapsule) -> str:
-    marker = f"[bebop:{task.id}] "
+    if task.run_id:
+        marker = f"[bebop:{task.run_id}:{task.id}] "
+    else:
+        marker = f"[bebop:{task.id}] "
     return (marker + task.title)[:100]
 
 
@@ -389,6 +392,8 @@ def render_task_capsule(task: TaskCapsule) -> str:
         f"TASK\n{task.title}",
         f"OBJECTIVE\n{task.objective}",
     ]
+    if task.dependencies:
+        sections.append("DEPENDENCIES\n" + "\n".join(task.dependencies))
     if task.relevant_files:
         sections.append("RELEVANT FILES\n" + "\n".join(task.relevant_files))
     if task.known_decisions:
