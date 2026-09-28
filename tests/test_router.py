@@ -8,7 +8,7 @@ def test_security_task_routes_to_codex():
         id="T1",
         title="Change auth token validation",
         objective="Refactor authentication token validation",
-        project_id="demo",
+        project="demo",
         relevant_files=["src/auth/token.py"],
         acceptance_commands=["pytest tests/auth"],
     )
@@ -17,3 +17,19 @@ def test_security_task_routes_to_codex():
 
     assert result.harness == "codex"
     assert result.effort == "high"
+
+
+def test_routine_task_routes_to_opencode_ollama():
+    task = TaskCapsule(
+        id="T2",
+        title="Implement parser",
+        objective="Implement parser",
+        project="demo",
+        relevant_files=["src/parser.py"],
+        acceptance_commands=["pytest tests/test_parser.py"],
+    )
+
+    result = route(classify(task))
+
+    assert result.harness == "opencode"
+    assert result.provider == "ollama"
