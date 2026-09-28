@@ -1,34 +1,51 @@
 from __future__ import annotations
 
-from pathlib import PurePosixPath
+from pathspec import PathSpec
 
 from bebop.models import CommandResult, TaskCapsule, VerificationResult
 
 
-def inspect_workspace(task: TaskCapsule, changed_paths: list[str]) -> VerificationResult:
-    """Evaluate Bebop-owned policy over AO-reported workspace facts."""
-    protected: list[str] = []
+def _normalize(path: str) -> str:
+    return path.replace("\\", "/").lstrip("./")
 
-    for changed in changed_paths:
-        changed_path = PurePosixPath(changed)
-        for pattern in task.protected_paths:
-            if pattern.endswith("/**"):
-                prefix = PurePosixPath(pattern[:-3])
-                if changed_path == prefix or prefix in changed_path.parents:
-                    protected.append(changed)
-                    break
-            elif changed == pattern:
-                protected.append(changed)
-                break
+
+def _spec(patterns: list[str]) -> PathSpec | None:
+    if not patterns:
+        return None
+    return PathSpec.from_lines("gitwildmatch", patterns)
+
+
+def inspect_workspace(task: TaskCapsule, changed_paths: list[str]) -> VerificationResult:
+    """Evaluate Bebop-owned path policy over AO-reported current-task edits."""
+    changed = [_normalize(path) for path in changed_paths]
+
+    protected_spec = _spec(task.protected_paths)
+    protected = (
+        [path for path in changed if protected_spec.match_file(path)]
+        if protected_spec
+        else []
+    )
+
+    allowed_spec = _spec(task.allowed_paths)
+    out_of_scope = (
+        [path for path in changed if not allowed_spec.match_file(path)]
+        if allowed_spec
+        else []
+    )
 
     acceptance_pending = bool(task.acceptance_commands)
-    failures = ["protected verification artifacts changed"] if protected else []
+    failures: list[str] = []
+    if protected:
+        failures.append("protected verification artifacts changed")
+    if out_of_scope:
+        failures.append("changes outside allowed task paths")
 
     return VerificationResult(
-        passed=not protected and not acceptance_pending,
-        evidence=[f"{len(changed_paths)} changed path(s) inspected through AO"],
+        passed=not protected and not out_of_scope and not acceptance_pending,
+        evidence=[f"{len(changed)} current-task changed path(s) inspected through AO"],
         failures=failures,
         protected_path_changes=protected,
+        out_of_scope_changes=out_of_scope,
         acceptance_pending=acceptance_pending,
     )
 
@@ -49,17 +66,21 @@ def apply_command_results(
     commands_passed = complete and all(result.passed for result in command_results)
 
     return VerificationResult(
-        passed=not policy.protected_path_changes and commands_passed,
+        passed=(
+            not policy.protected_path_changes
+            and not policy.out_of_scope_changes
+            and commands_passed
+        ),
         evidence=[
             *policy.evidence,
             f"{len(command_results)}/{len(expected_commands)} acceptance command(s) executed",
         ],
         failures=failures,
         protected_path_changes=policy.protected_path_changes,
+        out_of_scope_changes=policy.out_of_scope_changes,
         acceptance_pending=not complete,
         command_results=command_results,
     )
 
 
-# Backward-compatible name for the first bootstrap tests/callers.
 check_protected_paths = inspect_workspace
