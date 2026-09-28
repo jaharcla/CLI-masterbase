@@ -5,6 +5,9 @@ import os
 from dbos import DBOS, DBOSConfig
 
 
+TASK_QUEUE = "bebop-tasks"
+
+
 def init_dbos() -> None:
     config: DBOSConfig = {
         "name": "bebop-code-hub",
@@ -13,3 +16,7 @@ def init_dbos() -> None:
     }
     DBOS(config=config)
     DBOS.launch()
+    DBOS.register_queue(
+        TASK_QUEUE,
+        worker_concurrency=max(1, int(os.getenv("BEBOP_TASK_CONCURRENCY", "3"))),
+    )
