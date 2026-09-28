@@ -70,8 +70,10 @@ def test_runs_acceptance_command_through_ao_mux():
 
 
 def test_powershell_wrapper_reports_exit_marker():
-    wrapped, newline = _wrap_command("pytest -q", "__MARKER__", "powershell")
+    wrapped, newline = _wrap_command("exit 1", "__MARKER__", "powershell")
 
     assert "__MARKER__:$__bebop_code" in wrapped
     assert "$LASTEXITCODE" in wrapped
+    assert "-EncodedCommand" in wrapped
+    assert "exit 1" not in wrapped
     assert newline == "\r\n"

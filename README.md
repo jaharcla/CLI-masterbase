@@ -8,6 +8,8 @@ It does **not** reimplement worktrees, agent process supervision, durable workfl
 
 - **Agent Orchestrator (AO)** — agents, sessions, worktrees, Windows runtime, session shells, durable provider switching
 - **OpenCode** — Groq and Ollama worker harness
+- **Codex** — high-capability AO worker and escalation harness
+- **Antigravity (`agy`)** — additional high-capability AO worker harness
 - **DBOS** — durable workflows, queues, recovery, concurrency
 - **PydanticAI** — typed natural-language goal planning
 - **grep-ast** — AST-aware repository context
@@ -31,7 +33,7 @@ DBOS dependency-safe parallel waves
 Bebop classifier/router
    ├─ Mechanical/Routine → OpenCode/Ollama
    ├─ Engineering        → OpenCode/Groq
-   └─ Reasoning/Critical → Codex
+   └─ Reasoning/Critical → Codex or Antigravity (`agy`)
    ↓
 AO-managed worker worktree
    ↓
@@ -63,6 +65,45 @@ GoalOutcome
 Workers never decide whether their own task succeeded.
 
 ## Natural-language usage
+
+## Windows PowerShell Quick Start
+
+```powershell
+git clone <repo-url>
+cd CLI-masterbase
+git checkout bebop/oss-first
+.\scripts\setup.ps1
+Copy-Item .env.example .env
+notepad .env
+bebop doctor
+bebop plan "Add a small tested feature" --project <AO project id/name/path>
+bebop smoke-test --project <AO project id/name/path>
+bebop goal "Implement a small testable feature in this project" --project <AO project id/name/path>
+```
+
+Required external tools/services:
+
+- Python 3.11+
+- Git
+- Agent Orchestrator daemon
+- OpenCode available through AO
+- Codex available through AO
+- Antigravity available through AO as `agy` for the optional high-capability route
+- grep-ast
+- Groq API key and model
+- Ollama service and configured model for Ollama-routed tasks
+
+Readiness check:
+
+```powershell
+bebop doctor
+```
+
+Local smoke test:
+
+```powershell
+bebop smoke-test --project <AO project id/name/path>
+```
 
 List AO projects:
 
@@ -122,14 +163,15 @@ Initial policy:
 ```text
 Mechanical / Routine → OpenCode + Ollama
 Engineering          → OpenCode + Groq
-Reasoning / Critical → Codex
+Reasoning / Critical → Codex by default, or Antigravity with BEBOP_HIGH_CAPABILITY_HARNESS=agy
 ```
 
 For OpenCode routes set the exact model identifiers OpenCode accepts:
 
 ```env
-BEBOP_OLLAMA_MODEL=ollama/<exact-model-id>
-BEBOP_GROQ_MODEL=groq/<exact-model-id>
+BEBOP_OLLAMA_MODEL=ollama/qwen3:8b
+BEBOP_GROQ_MODEL=groq/openai/gpt-oss-120b
+BEBOP_HIGH_CAPABILITY_HARNESS=codex
 ```
 
 ## Verification

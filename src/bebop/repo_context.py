@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import sysconfig
 from pathlib import Path
 
 
@@ -41,14 +42,14 @@ def build_repo_context(
     if not root.is_dir():
         return f"Repository path unavailable: {root}"
 
-    executable = shutil.which("grep-ast") or shutil.which("gast")
-    if not executable:
+    command = find_grep_ast_command()
+    if not command:
         return "grep-ast is not available in the Bebop environment."
 
     pattern = goal_search_pattern(goal)
     try:
         completed = subprocess.run(
-            [executable, "--no-color", "-i", pattern],
+            [*command, "--no-color", "-i", pattern],
             cwd=root,
             capture_output=True,
             text=True,
@@ -70,3 +71,18 @@ def build_repo_context(
         output = output[:max_chars] + "\n...[grep-ast context truncated]"
 
     return output
+
+
+def find_grep_ast_command() -> list[str]:
+    executable = shutil.which("grep-ast") or shutil.which("gast")
+    if executable:
+        return [executable]
+
+    scripts = sysconfig.get_path("scripts")
+    if scripts:
+        for name in ("grep-ast.exe", "grep-ast", "gast.exe", "gast"):
+            candidate = Path(scripts) / name
+            if candidate.is_file():
+                return [str(candidate)]
+
+    return []

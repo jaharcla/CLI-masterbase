@@ -189,6 +189,40 @@ def test_switch_agent_rejects_non_native_target():
 
 
 @respx.mock
+def test_switch_agent_allows_antigravity_target():
+    post = respx.post("http://ao.test/api/v1/sessions/s-1/switch-agent").mock(
+        return_value=Response(
+            200,
+            json={
+                "switch": {
+                    "id": "sw-agy",
+                    "sessionId": "s-1",
+                    "fromHarness": "opencode",
+                    "targetHarness": "agy",
+                    "state": "completed",
+                }
+            },
+        )
+    )
+
+    client = AOClient("http://ao.test/api/v1")
+    try:
+        result = client.switch_agent(
+            "s-1",
+            RouteTarget(harness="agy", effort="high", reason="test"),
+            idempotency_key="key",
+        )
+    finally:
+        client.close()
+
+    assert result.target_harness == "agy"
+    assert json.loads(post.calls[0].request.content) == {
+        "targetHarness": "agy",
+        "idempotencyKey": "key",
+    }
+
+
+@respx.mock
 def test_changed_paths_ignore_only_known_dependency_commits():
     respx.get("http://ao.test/api/v1/sessions/s-1/workspace/files").mock(
         return_value=Response(

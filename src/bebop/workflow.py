@@ -107,10 +107,47 @@ def verify_commands_step(session_id: str, commands: list[str]) -> list[dict]:
 
 
 @DBOS.step()
+def changed_paths_since_step(session_id: str, baseline_sha: str) -> list[str]:
+    client = AOClient()
+    try:
+        result = AOTerminalVerifier(client).run_command(
+            session_id,
+            f"git -c core.quotepath=false diff --name-only {baseline_sha} --",
+            timeout_seconds=60.0,
+        )
+        if not result.passed:
+            raise AOError(f"Could not inspect task diff from baseline: {result.output}")
+        paths: list[str] = []
+        for line in result.output.splitlines():
+            path = line.strip().replace("\\", "/")
+            if not path or "EncodedCommand" in path or "__BEBOP_EXIT_" in path:
+                continue
+            if path.startswith("PS ") or path.startswith(">") or "\x1b]" in path:
+                continue
+            paths.append(path.lstrip("./"))
+        return sorted(set(paths))
+    finally:
+        client.close()
+
+
+@DBOS.step()
 def discover_verification_step(session_id: str) -> list[str]:
     client = AOClient()
     try:
-        return discover_verification_commands(client.workspace_paths(session_id))
+        paths = client.workspace_paths(session_id)
+        if not paths:
+            result = AOTerminalVerifier(client).run_command(
+                session_id,
+                "git ls-files",
+                timeout_seconds=60.0,
+            )
+            if result.passed:
+                paths = [
+                    line.strip()
+                    for line in result.output.splitlines()
+                    if line.strip()
+                ]
+        return discover_verification_commands(paths)
     finally:
         client.close()
 
@@ -369,6 +406,20 @@ def _early_outcome(
     ).model_dump()
 
 
+def _with_baseline_changes(
+    observation: SessionObservation,
+    session_id: str,
+    baseline_sha: str | None,
+) -> SessionObservation:
+    if not baseline_sha:
+        return observation
+    return observation.model_copy(
+        update={
+            "changed_paths": changed_paths_since_step(session_id, baseline_sha),
+        }
+    )
+
+
 @DBOS.workflow()
 def execute_task(
     task_payload: dict,
@@ -446,6 +497,11 @@ def execute_task(
                 inherited,
             )
         )
+        observation = _with_baseline_changes(
+            observation,
+            session.session_id,
+            baseline_sha,
+        )
     else:
         observation = SessionObservation.model_validate(
             observe_step(session.session_id)
@@ -474,6 +530,11 @@ def execute_task(
                 inherited,
             )
         )
+        observation = _with_baseline_changes(
+            observation,
+            session.session_id,
+            baseline_sha,
+        )
 
         if observation.activity_state == "blocked":
             state = "blocked_human_decision_required"
@@ -490,17 +551,27 @@ def execute_task(
                     state = "escalation_unavailable_source_not_idle"
                 else:
                     escalation_attempts = 1
-                    agent_switch = AgentSwitch.model_validate(
-                        switch_agent_step(
-                            session.session_id,
-                            escalated_route.model_dump(),
-                            _escalation_idempotency_key(
-                                task,
-                                escalated_route,
-                                escalation_attempts,
-                            ),
+                    try:
+                        agent_switch = AgentSwitch.model_validate(
+                            switch_agent_step(
+                                session.session_id,
+                                escalated_route.model_dump(),
+                                _escalation_idempotency_key(
+                                    task,
+                                    escalated_route,
+                                    escalation_attempts,
+                                ),
+                            )
                         )
-                    )
+                    except AOError as exc:
+                        agent_switch = AgentSwitch(
+                            id="",
+                            session_id=session.session_id,
+                            from_harness=target.harness,
+                            target_harness=escalated_route.harness,
+                            state="failed",
+                            error_code=str(exc),
+                        )
 
                     if agent_switch.state != "completed":
                         state = "escalation_switch_failed"
@@ -510,6 +581,11 @@ def execute_task(
                                 session.session_id,
                                 ignored_commits=inherited,
                             )
+                        )
+                        observation = _with_baseline_changes(
+                            observation,
+                            session.session_id,
+                            baseline_sha,
                         )
                         if observation.activity_state == "blocked":
                             state = "blocked_human_decision_required"
@@ -530,6 +606,11 @@ def execute_task(
                                     True,
                                     inherited,
                                 )
+                            )
+                            observation = _with_baseline_changes(
+                                observation,
+                                session.session_id,
+                                baseline_sha,
                             )
 
                             if observation.activity_state == "blocked":

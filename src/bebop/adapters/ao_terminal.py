@@ -211,12 +211,11 @@ def _wrap_command(command: str, marker: str, shell: str | None) -> tuple[str, st
     normalized = (shell or "").lower()
 
     if normalized in {"powershell", "pwsh"}:
+        executable = "pwsh" if normalized == "pwsh" else "powershell"
+        encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
         wrapped = (
-            f"& {{ {command} }}; "
-            "$__bebop_ok=$?; "
-            "$__bebop_code = if ($__bebop_ok) { 0 } "
-            "elseif ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { $LASTEXITCODE } "
-            "else { 1 }; "
+            f"& {executable} -NoProfile -EncodedCommand {encoded}; "
+            "$__bebop_code = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 }; "
             f'Write-Output "{marker}:$__bebop_code"'
         )
         return wrapped, "\r\n"

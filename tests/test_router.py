@@ -1,9 +1,10 @@
 from bebop.classifier import classify
 from bebop.models import Classification, Dimension, RouteTarget, TaskCapsule, WorkClass
-from bebop.router import escalation_route, route
+from bebop.router import antigravity_route, escalation_route, route
 
 
-def test_security_task_routes_to_codex():
+def test_security_task_routes_to_codex(monkeypatch):
+    monkeypatch.delenv("BEBOP_HIGH_CAPABILITY_HARNESS", raising=False)
     task = TaskCapsule(
         id="T1",
         title="Change auth token validation",
@@ -17,6 +18,22 @@ def test_security_task_routes_to_codex():
 
     assert result.harness == "codex"
     assert result.effort == "high"
+
+
+def test_high_capability_route_can_select_antigravity(monkeypatch):
+    monkeypatch.setenv("BEBOP_HIGH_CAPABILITY_HARNESS", "agy")
+
+    result = route(_classification(WorkClass.REASONING))
+
+    assert result.harness == "agy"
+    assert result.effort == "medium"
+
+
+def test_antigravity_route_helper_targets_ao_agy():
+    result = antigravity_route()
+
+    assert result.harness == "agy"
+    assert result.provider is None
 
 
 def test_routine_task_routes_to_opencode_ollama():

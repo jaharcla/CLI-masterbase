@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from bebop.models import Classification, RouteTarget, WorkClass
 
 
@@ -21,11 +23,20 @@ def route(classification: Classification) -> RouteTarget:
             reason="engineering work defaults to fast cloud inference",
         )
 
+    harness = os.getenv("BEBOP_HIGH_CAPABILITY_HARNESS", "codex").strip() or "codex"
+    if harness not in {"codex", "agy"}:
+        harness = "codex"
+
     return RouteTarget(
-        harness="codex",
+        harness=harness,
         effort="high" if kind == WorkClass.CRITICAL else "medium",
+        mode="tui" if harness == "agy" else "chat",
         reason="reasoning/critical work is protected for the strongest worker",
     )
+
+
+def antigravity_route(reason: str = "additional high-capability AO worker") -> RouteTarget:
+    return RouteTarget(harness="agy", effort="high", mode="tui", reason=reason)
 
 
 def escalation_route(
@@ -39,7 +50,7 @@ def escalation_route(
     OpenCode task escalates directly to Codex while retaining the same AO
     session/worktree. A Codex task has no stronger configured route yet.
     """
-    if current.harness == "codex":
+    if current.harness in {"codex", "agy"}:
         return None
 
     effort = (

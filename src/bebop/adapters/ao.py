@@ -225,7 +225,7 @@ class AOClient:
         timeout_seconds: float = 600.0,
         poll_seconds: float = 0.5,
     ) -> AgentSwitch:
-        if target.harness not in {"codex", "claude-code", "fx"}:
+        if target.harness not in {"codex", "agy", "claude-code", "fx"}:
             raise AOError(
                 f"AO in-place agent switching does not support target harness "
                 f"{target.harness!r}"

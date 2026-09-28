@@ -6,13 +6,33 @@ from pathlib import Path
 import typer
 
 from bebop.adapters.ao import AOClient
+from bebop.doctor import run_doctor
 from bebop.models import GoalPlan, TaskCapsule
 from bebop.planner import plan_goal
 from bebop.repo_context import build_repo_context
 from bebop.runtime import init_dbos
+from bebop.smoke import run_smoke_test
 from bebop.workflow import execute_goal, execute_task
 
 app = typer.Typer(no_args_is_help=True)
+
+
+@app.command()
+def doctor() -> None:
+    """Check whether Bebop can run a real end-to-end goal."""
+    report = run_doctor()
+    for check in report.checks:
+        status = "PASS" if check.ok else "FAIL"
+        suffix = f" - {check.detail}" if check.detail else ""
+        typer.echo(f"{status} {check.name}{suffix}")
+
+    typer.echo("")
+    typer.echo("Blocks bebop goal:")
+    if report.blockers:
+        for blocker in report.blockers:
+            typer.echo(f"- {blocker}")
+        raise typer.Exit(1)
+    typer.echo("- none")
 
 
 @app.command()
@@ -87,6 +107,21 @@ def goal(
     init_dbos()
     result = execute_goal(goal_plan.model_dump())
     typer.echo(json.dumps(result, indent=2))
+
+
+@app.command("smoke-test")
+def smoke_test(
+    project: str | None = typer.Option(None, "--project", "-p", help="AO project selector. Defaults to the disposable fixture path."),
+) -> None:
+    """Run an opt-in real-stack edit/verify/integrate smoke test."""
+    try:
+        result = run_smoke_test(project)
+    except Exception as exc:
+        typer.echo(f"FAIL smoke-test: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(result, indent=2))
+    if result.get("state") != "verified":
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
