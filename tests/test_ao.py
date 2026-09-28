@@ -169,7 +169,7 @@ def test_switch_agent_polls_same_session_until_completed():
 
     assert result.state == "completed"
     assert result.target_harness == "codex"
-    assert post.calls[0].request.json() == {
+    assert json.loads(post.calls[0].request.content) == {
         "targetHarness": "codex",
         "idempotencyKey": "bebop-T1-esc-1-test",
     }
