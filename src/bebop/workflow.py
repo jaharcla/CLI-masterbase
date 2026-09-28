@@ -63,6 +63,7 @@ def observe_step(
     session_id: str,
     after_activity_at: str | None = None,
     require_progress: bool = False,
+    ignored_commits: list[str] | None = None,
 ) -> dict:
     client = AOClient()
     try:
@@ -70,6 +71,7 @@ def observe_step(
             session_id,
             after_activity_at=after_activity_at,
             require_progress=require_progress,
+            ignored_commits=set(ignored_commits or []),
         ).model_dump()
     finally:
         client.close()
@@ -309,7 +311,7 @@ def execute_task(
         # Let AO finish provisioning the idle session/worktree before importing
         # verified predecessor commits.
         observation = SessionObservation.model_validate(
-            observe_step(session.session_id)
+            observe_step(session.session_id, ignored_commits=inherited)
         )
         if observation.activity_state == "blocked":
             return _early_outcome(
@@ -343,6 +345,7 @@ def execute_task(
                 session.session_id,
                 before_activity_at,
                 True,
+                inherited,
             )
         )
     else:
