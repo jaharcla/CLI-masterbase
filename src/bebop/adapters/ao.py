@@ -9,7 +9,14 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 
-from bebop.models import AOProject, RouteTarget, SessionObservation, TaskCapsule, WorkerSession
+from bebop.models import (
+    AOProject,
+    AgentSwitch,
+    RouteTarget,
+    SessionObservation,
+    TaskCapsule,
+    WorkerSession,
+)
 
 
 class AOError(RuntimeError):
@@ -132,14 +139,15 @@ class AOClient:
 
     def get_session(self, session_id: str) -> dict[str, Any]:
         body = self._json(
-            self._client.get(f"/sessions/{session_id}"),
+            self._client.get(f"/sessions/{quote(session_id, safe='')}"),
             "AO session read",
         )
         return dict(body.get("session", body))
 
     def changed_paths(self, session_id: str) -> list[str]:
+        escaped = quote(session_id, safe="")
         body = self._json(
-            self._client.get(f"/sessions/{session_id}/workspace/files"),
+            self._client.get(f"/sessions/{escaped}/workspace/files"),
             "AO workspace file list",
         )
         paths: list[str] = []
@@ -149,6 +157,69 @@ class AOClient:
             if path and status != "unmodified":
                 paths.append(path)
         return sorted(set(paths))
+
+    def list_agent_switches(self, session_id: str) -> list[AgentSwitch]:
+        escaped = quote(session_id, safe="")
+        body = self._json(
+            self._client.get(f"/sessions/{escaped}/agent-switches"),
+            "AO agent switch list",
+        )
+        switches: list[AgentSwitch] = []
+        for item in body.get("switches", []):
+            payload = dict(item)
+            payload["raw"] = dict(item)
+            switches.append(AgentSwitch.model_validate(payload))
+        return switches
+
+    def switch_agent(
+        self,
+        session_id: str,
+        target: RouteTarget,
+        *,
+        idempotency_key: str,
+        timeout_seconds: float = 600.0,
+        poll_seconds: float = 0.5,
+    ) -> AgentSwitch:
+        if target.harness not in {"codex", "claude-code", "fx"}:
+            raise AOError(
+                f"AO in-place agent switching does not support target harness "
+                f"{target.harness!r}"
+            )
+        key = idempotency_key.strip()
+        if not key or len(key) > 128:
+            raise AOError("AO agent switch idempotency key must be 1..128 characters")
+
+        escaped = quote(session_id, safe="")
+        payload: dict[str, Any] = {
+            "targetHarness": target.harness,
+            "idempotencyKey": key,
+        }
+        if target.model:
+            payload["model"] = target.model
+
+        body = self._json(
+            self._client.post(f"/sessions/{escaped}/switch-agent", json=payload),
+            "AO agent switch",
+        )
+        raw_switch = dict(body.get("switch", body))
+        raw_switch["raw"] = dict(raw_switch)
+        switch = AgentSwitch.model_validate(raw_switch)
+        if switch.state in {"completed", "failed"}:
+            return switch
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            for candidate in self.list_agent_switches(session_id):
+                if candidate.id != switch.id:
+                    continue
+                if candidate.state in {"completed", "failed"}:
+                    return candidate
+            time.sleep(poll_seconds)
+
+        raise AOError(
+            f"AO agent switch {switch.id} did not finish within "
+            f"{timeout_seconds:.0f}s"
+        )
 
     def open_shell_terminal(
         self,
@@ -241,7 +312,7 @@ class AOClient:
 
         self._json(
             self._client.post(
-                f"/sessions/{session_id}/send",
+                f"/sessions/{quote(session_id, safe='')}/send",
                 json={"message": message},
             ),
             "AO send",
@@ -250,7 +321,7 @@ class AOClient:
 
     def kill(self, session_id: str) -> None:
         self._json(
-            self._client.post(f"/sessions/{session_id}/kill"),
+            self._client.post(f"/sessions/{quote(session_id, safe='')}/kill"),
             "AO kill",
             allow_empty=True,
         )
