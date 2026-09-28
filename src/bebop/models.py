@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class WorkClass(StrEnum):
@@ -35,7 +37,7 @@ class TaskCapsule(BaseModel):
     id: str
     title: str
     objective: str
-    project_id: str
+    project: str = Field(validation_alias=AliasChoices("project", "project_id"))
     relevant_files: list[str] = Field(default_factory=list)
     known_decisions: list[str] = Field(default_factory=list)
     allowed_paths: list[str] = Field(default_factory=list)
@@ -45,6 +47,7 @@ class TaskCapsule(BaseModel):
 
 class RouteTarget(BaseModel):
     harness: str
+    provider: str | None = None
     model: str | None = None
     effort: str | None = None
     mode: str = "chat"
@@ -52,11 +55,29 @@ class RouteTarget(BaseModel):
     reason: str
 
 
+class AOProject(BaseModel):
+    id: str
+    name: str
+    path: str = ""
+    kind: str = ""
+    folder_missing: bool = False
+
+
 class WorkerSession(BaseModel):
     session_id: str
     project_id: str
     route: RouteTarget
-    raw: dict = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class SessionObservation(BaseModel):
+    session_id: str
+    status: str = ""
+    activity_state: str = ""
+    provision_state: str = ""
+    is_terminated: bool = False
+    changed_paths: list[str] = Field(default_factory=list)
+    raw_session: dict[str, Any] = Field(default_factory=dict)
 
 
 class VerificationResult(BaseModel):
@@ -64,3 +85,13 @@ class VerificationResult(BaseModel):
     evidence: list[str] = Field(default_factory=list)
     failures: list[str] = Field(default_factory=list)
     protected_path_changes: list[str] = Field(default_factory=list)
+    acceptance_pending: bool = False
+
+
+class TaskOutcome(BaseModel):
+    state: str
+    classification: Classification
+    route: RouteTarget
+    session: WorkerSession
+    observation: SessionObservation
+    verification: VerificationResult
