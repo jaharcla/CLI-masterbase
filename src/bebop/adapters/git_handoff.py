@@ -24,37 +24,151 @@ class GitHandoff:
             raise AOError("git rev-parse HEAD did not return a commit SHA")
         return matches[-1].lower()
 
+    def conflicted_files(self, session_id: str) -> list[str]:
+        result = self.verifier.run_command(
+            session_id,
+            "git diff --name-only --diff-filter=U",
+        )
+        if not result.passed:
+            raise AOError(f"Could not inspect merge conflicts: {result.output}")
+        return sorted(
+            {
+                line.strip().replace("\\", "/")
+                for line in result.output.splitlines()
+                if line.strip()
+            }
+        )
+
+    def apply_commit(
+        self,
+        session_id: str,
+        commit: str,
+        *,
+        leave_conflict: bool = False,
+    ) -> dict:
+        if not _SHA_RE.fullmatch(commit):
+            raise AOError(f"Invalid dependency commit SHA: {commit!r}")
+
+        ancestor = self.verifier.run_command(
+            session_id,
+            f"git merge-base --is-ancestor {commit} HEAD",
+        )
+        if ancestor.passed:
+            return {
+                "ok": True,
+                "commit": commit,
+                "already_present": True,
+                "head": self.head(session_id),
+            }
+        if ancestor.exit_code != 1:
+            raise AOError(
+                f"Could not inspect dependency commit {commit}: {ancestor.output}"
+            )
+
+        cherry_pick = self.verifier.run_command(
+            session_id,
+            f"git cherry-pick {commit}",
+        )
+        if cherry_pick.passed:
+            return {
+                "ok": True,
+                "commit": commit,
+                "already_present": False,
+                "head": self.head(session_id),
+            }
+
+        conflicts = self.conflicted_files(session_id)
+        if leave_conflict and conflicts:
+            return {
+                "ok": False,
+                "conflict": True,
+                "commit": commit,
+                "conflict_files": conflicts,
+                "output": cherry_pick.output,
+            }
+
+        self.abort_cherry_pick(session_id)
+        raise AOError(
+            f"Dependency commit {commit} conflicted in AO worktree: "
+            f"{cherry_pick.output}"
+        )
+
     def integrate_commits(self, session_id: str, commits: list[str]) -> str:
         for commit in commits:
-            if not _SHA_RE.fullmatch(commit):
-                raise AOError(f"Invalid dependency commit SHA: {commit!r}")
-
-            ancestor = self.verifier.run_command(
-                session_id,
-                f"git merge-base --is-ancestor {commit} HEAD",
-            )
-            if ancestor.passed:
-                continue
-            if ancestor.exit_code not in {1}:
-                raise AOError(
-                    f"Could not inspect dependency commit {commit}: {ancestor.output}"
-                )
-
-            cherry_pick = self.verifier.run_command(
-                session_id,
-                f"git cherry-pick {commit}",
-            )
-            if not cherry_pick.passed:
-                try:
-                    self.verifier.run_command(session_id, "git cherry-pick --abort")
-                except AOError:
-                    pass
-                raise AOError(
-                    f"Dependency commit {commit} conflicted in AO worktree: "
-                    f"{cherry_pick.output}"
-                )
-
+            self.apply_commit(session_id, commit)
         return self.head(session_id)
+
+    def abort_cherry_pick(self, session_id: str) -> None:
+        abort = self.verifier.run_command(session_id, "git cherry-pick --abort")
+        if not abort.passed:
+            # There may be no cherry-pick left to abort because an agent already
+            # completed it. Only raise when the repository is still conflicted.
+            if self.conflicted_files(session_id):
+                raise AOError(f"Could not abort conflicted cherry-pick: {abort.output}")
+
+    def continue_cherry_pick(self, session_id: str) -> dict:
+        conflicts = self.conflicted_files(session_id)
+        if conflicts:
+            return {
+                "ok": False,
+                "conflict": True,
+                "conflict_files": conflicts,
+                "error": "merge conflict markers remain",
+            }
+
+        cherry_pick_head = self.verifier.run_command(
+            session_id,
+            "git rev-parse -q --verify CHERRY_PICK_HEAD",
+        )
+
+        if cherry_pick_head.passed:
+            stage = self.verifier.run_command(session_id, "git add -A")
+            if not stage.passed:
+                return {
+                    "ok": False,
+                    "error": f"could not stage conflict resolution: {stage.output}",
+                }
+
+            continued = self.verifier.run_command(
+                session_id,
+                (
+                    'git -c user.name="Bebop" -c user.email="bebop@local" '
+                    "-c core.editor=true cherry-pick --continue"
+                ),
+            )
+            if not continued.passed:
+                remaining = self.conflicted_files(session_id)
+                return {
+                    "ok": False,
+                    "conflict": bool(remaining),
+                    "conflict_files": remaining,
+                    "error": f"could not continue cherry-pick: {continued.output}",
+                }
+        elif cherry_pick_head.exit_code not in {1}:
+            return {
+                "ok": False,
+                "error": (
+                    "could not inspect cherry-pick state: "
+                    f"{cherry_pick_head.output}"
+                ),
+            }
+
+        status = self.verifier.run_command(session_id, "git status --porcelain")
+        if not status.passed:
+            return {
+                "ok": False,
+                "error": f"could not inspect resolved worktree: {status.output}",
+            }
+        if status.output.strip():
+            return {
+                "ok": False,
+                "error": (
+                    "integration worker left uncommitted changes after conflict "
+                    f"resolution: {status.output}"
+                ),
+            }
+
+        return {"ok": True, "head": self.head(session_id)}
 
     def commit_verified_changes(
         self,
