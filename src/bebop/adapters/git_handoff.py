@@ -15,7 +15,16 @@ class GitHandoff:
     def __init__(self, client: AOClient):
         self.verifier = AOTerminalVerifier(client)
 
-    def integrate_commits(self, session_id: str, commits: list[str]) -> None:
+    def head(self, session_id: str) -> str:
+        rev = self.verifier.run_command(session_id, "git rev-parse HEAD")
+        if not rev.passed:
+            raise AOError(f"Could not resolve worktree HEAD: {rev.output}")
+        matches = _SHA_RE.findall(rev.output)
+        if not matches:
+            raise AOError("git rev-parse HEAD did not return a commit SHA")
+        return matches[-1].lower()
+
+    def integrate_commits(self, session_id: str, commits: list[str]) -> str:
         for commit in commits:
             if not _SHA_RE.fullmatch(commit):
                 raise AOError(f"Invalid dependency commit SHA: {commit!r}")
@@ -45,7 +54,27 @@ class GitHandoff:
                     f"{cherry_pick.output}"
                 )
 
-    def commit_verified_changes(self, session_id: str, task_id: str) -> str | None:
+        return self.head(session_id)
+
+    def commit_verified_changes(
+        self,
+        session_id: str,
+        task_id: str,
+        baseline_sha: str,
+    ) -> str | None:
+        if not _SHA_RE.fullmatch(baseline_sha):
+            raise AOError(f"Invalid task baseline SHA: {baseline_sha!r}")
+
+        # Agents may create their own commits. Collapse every verified change
+        # after the dependency baseline into one canonical handoff commit so
+        # downstream tasks inherit exactly this task's verified delta.
+        reset = self.verifier.run_command(
+            session_id,
+            f"git reset --soft {baseline_sha}",
+        )
+        if not reset.passed:
+            raise AOError(f"Could not reset task history to baseline: {reset.output}")
+
         stage = self.verifier.run_command(session_id, "git add -A")
         if not stage.passed:
             raise AOError(f"Could not stage verified task changes: {stage.output}")
@@ -66,11 +95,4 @@ class GitHandoff:
         if not commit.passed:
             raise AOError(f"Could not commit verified task changes: {commit.output}")
 
-        rev = self.verifier.run_command(session_id, "git rev-parse HEAD")
-        if not rev.passed:
-            raise AOError(f"Could not resolve verified commit SHA: {rev.output}")
-
-        matches = _SHA_RE.findall(rev.output)
-        if not matches:
-            raise AOError("git rev-parse HEAD did not return a commit SHA")
-        return matches[-1].lower()
+        return self.head(session_id)
