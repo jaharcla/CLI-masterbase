@@ -4,27 +4,20 @@ from bebop.models import Classification, RouteTarget, WorkClass
 
 
 def route(classification: Classification) -> RouteTarget:
-    """Explicit first-pass policy. Keep routing transparent and testable."""
+    """Explicit first-pass policy. Provider choice is separate from concrete model IDs."""
     kind = classification.work_class
 
-    if kind == WorkClass.MECHANICAL:
+    if kind in {WorkClass.MECHANICAL, WorkClass.ROUTINE}:
         return RouteTarget(
             harness="opencode",
-            model="ollama",
-            reason="mechanical work defaults to local/unmetered inference",
-        )
-
-    if kind == WorkClass.ROUTINE:
-        return RouteTarget(
-            harness="opencode",
-            model="ollama",
-            reason="routine + verifiable work gets a cheap first attempt",
+            provider="ollama",
+            reason="cheap, highly verifiable work gets a local/unmetered first attempt",
         )
 
     if kind == WorkClass.ENGINEERING:
         return RouteTarget(
             harness="opencode",
-            model="groq",
+            provider="groq",
             reason="engineering work defaults to fast cloud inference",
         )
 
