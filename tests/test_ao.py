@@ -119,3 +119,70 @@ def test_opencode_route_requires_concrete_model(monkeypatch):
             )
     finally:
         client.close()
+
+
+@respx.mock
+def test_switch_agent_polls_same_session_until_completed():
+    post = respx.post("http://ao.test/api/v1/sessions/s-1/switch-agent").mock(
+        return_value=Response(
+            202,
+            json={
+                "switch": {
+                    "id": "sw-1",
+                    "sessionId": "s-1",
+                    "fromHarness": "opencode",
+                    "targetHarness": "codex",
+                    "state": "preparing_handoff",
+                }
+            },
+        )
+    )
+    respx.get("http://ao.test/api/v1/sessions/s-1/agent-switches").mock(
+        return_value=Response(
+            200,
+            json={
+                "switches": [
+                    {
+                        "id": "sw-1",
+                        "sessionId": "s-1",
+                        "fromHarness": "opencode",
+                        "targetHarness": "codex",
+                        "state": "completed",
+                        "agentHandoffStatus": "received",
+                        "semanticHandoffIncluded": True,
+                    }
+                ]
+            },
+        )
+    )
+
+    client = AOClient("http://ao.test/api/v1")
+    try:
+        result = client.switch_agent(
+            "s-1",
+            RouteTarget(harness="codex", effort="medium", reason="escalation"),
+            idempotency_key="bebop-T1-esc-1-test",
+            poll_seconds=0,
+        )
+    finally:
+        client.close()
+
+    assert result.state == "completed"
+    assert result.target_harness == "codex"
+    assert post.calls[0].request.json() == {
+        "targetHarness": "codex",
+        "idempotencyKey": "bebop-T1-esc-1-test",
+    }
+
+
+def test_switch_agent_rejects_non_native_target():
+    client = AOClient("http://ao.test/api/v1")
+    try:
+        with pytest.raises(AOError):
+            client.switch_agent(
+                "s-1",
+                RouteTarget(harness="opencode", provider="groq", reason="test"),
+                idempotency_key="key",
+            )
+    finally:
+        client.close()
