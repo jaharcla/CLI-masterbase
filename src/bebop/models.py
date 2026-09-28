@@ -210,3 +210,4 @@ class GoalOutcome(BaseModel):
     waves: list[list[str]] = Field(default_factory=list)
     task_outcomes: dict[str, TaskOutcome] = Field(default_factory=dict)
     blocked_tasks: list[str] = Field(default_factory=list)
+    errors: dict[str, str] = Field(default_factory=dict)
