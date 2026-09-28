@@ -6,7 +6,10 @@ from bebop.models import CommandResult, TaskCapsule, VerificationResult
 
 
 def _normalize(path: str) -> str:
-    return path.replace("\\", "/").lstrip("./")
+    normalized = path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized.lstrip("/")
 
 
 def _spec(patterns: list[str]) -> PathSpec | None:
