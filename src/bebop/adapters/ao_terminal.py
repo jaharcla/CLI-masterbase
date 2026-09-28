@@ -113,7 +113,7 @@ class AOTerminalVerifier:
                 )
 
                 deadline = time.monotonic() + timeout_seconds
-                marker_re = re.compile(re.escape(marker) + rb":(-?\d+)")
+                marker_re = re.compile(re.escape(marker.encode("ascii")) + rb":(-?\d+)")
 
                 while time.monotonic() < deadline:
                     remaining = max(0.05, deadline - time.monotonic())
@@ -213,12 +213,10 @@ def _wrap_command(command: str, marker: str, shell: str | None) -> tuple[str, st
     if normalized in {"powershell", "pwsh"}:
         wrapped = (
             f"& {{ {command} }}; "
-            "$__bebop_ok=$?; $__bebop_code=$LASTEXITCODE; "
-            "if ($__bebop_ok) { "
-            "if ($null -eq $__bebop_code) { $__bebop_code=0 } "
-            "} else { "
-            "if ($null -eq $__bebop_code -or $__bebop_code -eq 0) { $__bebop_code=1 } "
-            "}; "
+            "$__bebop_ok=$?; "
+            "$__bebop_code = if ($__bebop_ok) { 0 } "
+            "elseif ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { $LASTEXITCODE } "
+            "else { 1 }; "
             f'Write-Output "{marker}:$__bebop_code"'
         )
         return wrapped, "\r\n"
