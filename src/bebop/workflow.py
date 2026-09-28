@@ -122,8 +122,8 @@ def integrate_dependency_commits_step(
 ) -> dict:
     client = AOClient()
     try:
-        GitHandoff(client).integrate_commits(session_id, commits)
-        return {"ok": True}
+        baseline_sha = GitHandoff(client).integrate_commits(session_id, commits)
+        return {"ok": True, "baseline_sha": baseline_sha}
     except AOError as exc:
         return {"ok": False, "error": str(exc)}
     finally:
@@ -131,10 +131,18 @@ def integrate_dependency_commits_step(
 
 
 @DBOS.step()
-def commit_verified_step(session_id: str, task_id: str) -> dict:
+def commit_verified_step(
+    session_id: str,
+    task_id: str,
+    baseline_sha: str,
+) -> dict:
     client = AOClient()
     try:
-        commit_sha = GitHandoff(client).commit_verified_changes(session_id, task_id)
+        commit_sha = GitHandoff(client).commit_verified_changes(
+            session_id,
+            task_id,
+            baseline_sha,
+        )
         return {"ok": True, "commit_sha": commit_sha}
     except AOError as exc:
         return {"ok": False, "error": str(exc), "commit_sha": None}
@@ -307,6 +315,8 @@ def execute_task(
         )
     )
 
+    baseline_sha: str | None = None
+
     if graph_mode:
         # Let AO finish provisioning the idle session/worktree before importing
         # verified predecessor commits.
@@ -335,6 +345,19 @@ def execute_task(
                 session=session,
                 observation=observation,
                 failures=[str(integration.get("error", "dependency integration failed"))],
+                inherited_commits=inherited,
+            )
+
+        baseline_sha = str(integration.get("baseline_sha") or "")
+        if not baseline_sha:
+            return _early_outcome(
+                state="dependency_integration_failed",
+                task=task,
+                classification=classification,
+                target=target,
+                session=session,
+                observation=observation,
+                failures=["dependency integration did not produce a baseline SHA"],
                 inherited_commits=inherited,
             )
 
@@ -373,6 +396,7 @@ def execute_task(
                 session.session_id,
                 before_activity_at,
                 True,
+                inherited,
             )
         )
 
@@ -407,7 +431,10 @@ def execute_task(
                         state = "escalation_switch_failed"
                     else:
                         observation = SessionObservation.model_validate(
-                            observe_step(session.session_id)
+                            observe_step(
+                                session.session_id,
+                                ignored_commits=inherited,
+                            )
                         )
                         if observation.activity_state == "blocked":
                             state = "blocked_human_decision_required"
@@ -426,6 +453,7 @@ def execute_task(
                                     session.session_id,
                                     before_activity_at,
                                     True,
+                                    inherited,
                                 )
                             )
 
@@ -451,7 +479,15 @@ def execute_task(
 
     commit_sha: str | None = None
     if graph_mode and state in SUCCESS_STATES:
-        committed = commit_verified_step(session.session_id, task.id)
+        if baseline_sha is None:
+            state = "verified_but_commit_failed"
+            committed = {"ok": False, "error": "task baseline SHA missing"}
+        else:
+            committed = commit_verified_step(
+                session.session_id,
+                task.id,
+                baseline_sha,
+            )
         if not committed.get("ok"):
             state = "verified_but_commit_failed"
         else:
