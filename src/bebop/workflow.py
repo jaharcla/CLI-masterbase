@@ -25,6 +25,7 @@ from bebop.models import (
 from bebop.router import escalation_route, route
 from bebop.runtime import TASK_QUEUE
 from bebop.verification import apply_command_results, inspect_workspace
+from bebop.verifier_registry import discover_verification_commands
 
 
 @DBOS.step()
@@ -104,6 +105,15 @@ def verify_commands_step(session_id: str, commands: list[str]) -> list[dict]:
 
 
 @DBOS.step()
+def discover_verification_step(session_id: str) -> list[str]:
+    client = AOClient()
+    try:
+        return discover_verification_commands(client.workspace_paths(session_id))
+    finally:
+        client.close()
+
+
+@DBOS.step()
 def integrate_dependency_commits_step(
     session_id: str,
     commits: list[str],
@@ -162,6 +172,10 @@ def _feedback_message(verification: VerificationResult) -> str:
         lines.append(
             "Protected files changed: " + ", ".join(verification.protected_path_changes)
         )
+    if verification.out_of_scope_changes:
+        lines.append(
+            "Out-of-scope files changed: " + ", ".join(verification.out_of_scope_changes)
+        )
     for result in verification.command_results:
         if result.passed:
             continue
@@ -208,14 +222,38 @@ def _run_verification(
     observation: SessionObservation,
 ) -> VerificationResult:
     policy = inspect_workspace(task, observation.changed_paths)
-    if policy.protected_path_changes or not task.acceptance_commands:
+    if policy.protected_path_changes or policy.out_of_scope_changes:
         return policy
+
+    commands = list(task.acceptance_commands)
+    source = "explicit"
+    if not commands:
+        commands = discover_verification_step(session_id)
+        source = "auto-discovered"
+
+    if not commands:
+        return VerificationResult(
+            passed=False,
+            evidence=[
+                *policy.evidence,
+                "no objective verification command could be discovered",
+            ],
+            failures=[
+                *policy.failures,
+                "objective verification unavailable",
+            ],
+            protected_path_changes=policy.protected_path_changes,
+            out_of_scope_changes=policy.out_of_scope_changes,
+            acceptance_pending=True,
+        )
 
     results = [
         CommandResult.model_validate(item)
-        for item in verify_commands_step(session_id, task.acceptance_commands)
+        for item in verify_commands_step(session_id, commands)
     ]
-    return apply_command_results(policy, task.acceptance_commands, results)
+    verified = apply_command_results(policy, commands, results)
+    verified.evidence.append(f"verification commands source: {source}")
+    return verified
 
 
 def _early_outcome(
