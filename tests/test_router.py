@@ -1,6 +1,6 @@
 from bebop.classifier import classify
-from bebop.models import TaskCapsule
-from bebop.router import route
+from bebop.models import Classification, Dimension, RouteTarget, TaskCapsule, WorkClass
+from bebop.router import escalation_route, route
 
 
 def test_security_task_routes_to_codex():
@@ -33,3 +33,39 @@ def test_routine_task_routes_to_opencode_ollama():
 
     assert result.harness == "opencode"
     assert result.provider == "ollama"
+
+
+def _classification(kind: WorkClass) -> Classification:
+    dim = Dimension(value="medium", confidence=0.8, basis=["test"])
+    return Classification(
+        work_class=kind,
+        reasoning=dim,
+        ambiguity=dim,
+        blast_radius=dim,
+        novelty=dim,
+        context_requirement=dim,
+        verifiability=dim,
+        security=dim,
+        reversibility=dim,
+        parallelizability=dim,
+    )
+
+
+def test_opencode_escalates_to_codex():
+    result = escalation_route(
+        RouteTarget(harness="opencode", provider="ollama", reason="initial"),
+        _classification(WorkClass.ROUTINE),
+    )
+
+    assert result is not None
+    assert result.harness == "codex"
+    assert result.effort == "medium"
+
+
+def test_codex_has_no_stronger_route_yet():
+    result = escalation_route(
+        RouteTarget(harness="codex", effort="high", reason="initial"),
+        _classification(WorkClass.CRITICAL),
+    )
+
+    assert result is None
