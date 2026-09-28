@@ -8,7 +8,7 @@ from bebop.adapters.ao import AOClient, AOError, render_task_capsule
 from bebop.adapters.ao_terminal import AOTerminalVerifier
 from bebop.adapters.git_handoff import GitHandoff
 from bebop.classifier import classify
-from bebop.graph import SUCCESS_STATES, build_sorter, dependency_lineage
+from bebop.graph import SUCCESS_STATES, build_sorter, dependency_lineage, ordered_verified_commits
 from bebop.models import (
     AOProject,
     AgentSwitch,
@@ -511,7 +511,7 @@ def execute_task(
 
 @DBOS.workflow()
 def execute_goal(plan_payload: dict) -> dict:
-    """Execute a validated goal DAG in dependency-safe parallel waves."""
+    """Execute a validated goal DAG and compose verified work in one AO workspace."""
     plan = GoalPlan.model_validate(plan_payload)
     task_by_id = {task.id: task for task in plan.tasks}
     sorter = build_sorter(plan)
@@ -524,9 +524,6 @@ def execute_goal(plan_payload: dict) -> dict:
     while sorter.is_active():
         ready = sorted(sorter.get_ready())
         if not ready:
-            # Nodes whose failed prerequisites were never marked done remain
-            # blocked inside graphlib. Independent branches have already had a
-            # chance to become ready on previous iterations.
             break
 
         waves.append(ready)
@@ -543,9 +540,6 @@ def execute_goal(plan_payload: dict) -> dict:
             )
             handles.append((task_id, inherited, handle))
 
-        # DBOS executes the wave concurrently subject to queue concurrency.
-        # Successful nodes are marked done in graphlib, unlocking only their
-        # dependency-safe descendants.
         for task_id, inherited, handle in handles:
             try:
                 outcome = TaskOutcome.model_validate(handle.get_result())
@@ -571,8 +565,104 @@ def execute_goal(plan_payload: dict) -> dict:
         if outcome.state not in SUCCESS_STATES
     ]
 
-    if not blocked and not errors and not non_success and len(outcomes) == len(plan.tasks):
-        state = "verified"
+    integration_session: WorkerSession | None = None
+    integration_commit_sha: str | None = None
+    integration_verification: VerificationResult | None = None
+
+    all_tasks_verified = (
+        not blocked
+        and not errors
+        and not non_success
+        and len(outcomes) == len(plan.tasks)
+    )
+
+    if all_tasks_verified:
+        commits = ordered_verified_commits(waves, outcomes)
+        if commits:
+            integration_task = TaskCapsule(
+                id="integration",
+                title="Integrate verified goal",
+                objective=plan.goal,
+                project=plan.project,
+                run_id=plan.id,
+            )
+            integration_target = RouteTarget(
+                harness="opencode",
+                reason="AO-owned goal integration workspace",
+            )
+            project = AOProject.model_validate(resolve_project_step(plan.project))
+            integration_session = WorkerSession.model_validate(
+                spawn_step(
+                    integration_task.model_dump(),
+                    integration_target.model_dump(),
+                    project.id,
+                    False,
+                )
+            )
+
+            ready_observation = SessionObservation.model_validate(
+                observe_step(integration_session.session_id)
+            )
+            if ready_observation.activity_state == "blocked":
+                state = "blocked_human_decision_required"
+            else:
+                integrated = integrate_dependency_commits_step(
+                    integration_session.session_id,
+                    commits,
+                )
+                if not integrated.get("ok"):
+                    state = "integration_failed"
+                    errors["integration"] = str(
+                        integrated.get("error", "goal integration failed")
+                    )
+                else:
+                    integration_commit_sha = str(
+                        integrated.get("baseline_sha") or ""
+                    ) or None
+                    commands = discover_verification_step(
+                        integration_session.session_id
+                    )
+                    if not commands:
+                        integration_verification = VerificationResult(
+                            passed=False,
+                            evidence=[
+                                "verified task commits integrated in AO workspace",
+                                "no repo-wide verification command discovered",
+                            ],
+                            failures=["objective goal-level verification unavailable"],
+                            acceptance_pending=True,
+                        )
+                        state = "integration_unverified"
+                    else:
+                        command_results = [
+                            CommandResult.model_validate(item)
+                            for item in verify_commands_step(
+                                integration_session.session_id,
+                                commands,
+                            )
+                        ]
+                        integration_verification = apply_command_results(
+                            VerificationResult(
+                                passed=False,
+                                evidence=[
+                                    "verified task commits integrated in AO workspace"
+                                ],
+                                acceptance_pending=True,
+                            ),
+                            commands,
+                            command_results,
+                        )
+                        integration_verification.evidence.append(
+                            "verification commands source: auto-discovered"
+                        )
+                        state = (
+                            "verified"
+                            if integration_verification.passed
+                            else "integration_verification_failed"
+                        )
+        else:
+            # A fully verified no-op goal is still complete.
+            state = "verified"
     elif any(
         outcome.state == "blocked_human_decision_required"
         for outcome in outcomes.values()
@@ -589,4 +679,7 @@ def execute_goal(plan_payload: dict) -> dict:
         task_outcomes=outcomes,
         blocked_tasks=blocked,
         errors=errors,
+        integration_session=integration_session,
+        integration_commit_sha=integration_commit_sha,
+        integration_verification=integration_verification,
     ).model_dump()
