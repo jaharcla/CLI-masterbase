@@ -131,6 +131,44 @@ def integrate_dependency_commits_step(
 
 
 @DBOS.step()
+def apply_integration_commit_step(session_id: str, commit: str) -> dict:
+    client = AOClient()
+    try:
+        return GitHandoff(client).apply_commit(
+            session_id,
+            commit,
+            leave_conflict=True,
+        )
+    except AOError as exc:
+        return {"ok": False, "conflict": False, "error": str(exc)}
+    finally:
+        client.close()
+
+
+@DBOS.step()
+def continue_integration_conflict_step(session_id: str) -> dict:
+    client = AOClient()
+    try:
+        return GitHandoff(client).continue_cherry_pick(session_id)
+    except AOError as exc:
+        return {"ok": False, "error": str(exc)}
+    finally:
+        client.close()
+
+
+@DBOS.step()
+def abort_integration_conflict_step(session_id: str) -> dict:
+    client = AOClient()
+    try:
+        GitHandoff(client).abort_cherry_pick(session_id)
+        return {"ok": True}
+    except AOError as exc:
+        return {"ok": False, "error": str(exc)}
+    finally:
+        client.close()
+
+
+@DBOS.step()
 def commit_verified_step(
     session_id: str,
     task_id: str,
@@ -226,6 +264,45 @@ def _escalation_idempotency_key(
     return f"bebop-{task.id[:40]}-esc-{attempt}-{digest}"[:128]
 
 
+def _integration_switch_idempotency_key(goal_id: str, commit: str) -> str:
+    material = f"{goal_id}|integration-conflict|{commit}|codex".encode("utf-8")
+    digest = hashlib.sha256(material).hexdigest()[:40]
+    return f"bebop-int-{digest}"
+
+
+def _integration_conflict_message(
+    goal: str,
+    commit: str,
+    conflict_files: list[str],
+    output: str,
+    *,
+    stronger: bool = False,
+) -> str:
+    role = (
+        "You are the stronger conflict-resolution worker."
+        if stronger
+        else "You are resolving a goal-integration conflict."
+    )
+    files = "\n".join(f"- {path}" for path in conflict_files) or "- unknown"
+    return (
+        f"{role}\n\n"
+        "A previously verified Bebop task commit collided with other previously "
+        "verified task work in this AO integration worktree. Resolve only the "
+        "current Git conflict while preserving the intent of both sides.\n\n"
+        f"GOAL\n{goal}\n\n"
+        f"COMMIT BEING APPLIED\n{commit}\n\n"
+        f"CONFLICT FILES\n{files}\n\n"
+        f"GIT OUTPUT\n{output[-6000:]}\n\n"
+        "REQUIREMENTS\n"
+        "- Remove all merge conflict markers and make the code internally coherent.\n"
+        "- Do not weaken tests, CI, or verification settings to make the merge pass.\n"
+        "- Do not modify unrelated files.\n"
+        "- Do NOT run git add, git commit, git reset, git cherry-pick --continue, "
+        "or git cherry-pick --abort. Bebop owns the Git transaction.\n"
+        "- When the conflict files are resolved, stop and wait for Bebop."
+    )
+
+
 def _run_verification(
     task: TaskCapsule,
     session_id: str,
@@ -318,8 +395,6 @@ def execute_task(
     baseline_sha: str | None = None
 
     if graph_mode:
-        # Let AO finish provisioning the idle session/worktree before importing
-        # verified predecessor commits.
         observation = SessionObservation.model_validate(
             observe_step(session.session_id, ignored_commits=inherited)
         )
@@ -568,6 +643,8 @@ def execute_goal(plan_payload: dict) -> dict:
     integration_session: WorkerSession | None = None
     integration_commit_sha: str | None = None
     integration_verification: VerificationResult | None = None
+    integration_conflict_repairs = 0
+    integration_escalations = 0
 
     all_tasks_verified = (
         not blocked
@@ -608,25 +685,162 @@ def execute_goal(plan_payload: dict) -> dict:
                 )
             )
 
-            ready_observation = SessionObservation.model_validate(
+            integration_observation = SessionObservation.model_validate(
                 observe_step(integration_session.session_id)
             )
-            if ready_observation.activity_state == "blocked":
+            if integration_observation.activity_state == "blocked":
                 state = "blocked_human_decision_required"
             else:
-                integrated = integrate_dependency_commits_step(
-                    integration_session.session_id,
-                    commits,
-                )
-                if not integrated.get("ok"):
-                    state = "integration_failed"
-                    errors["integration"] = str(
-                        integrated.get("error", "goal integration failed")
+                integration_ok = True
+
+                for commit in commits:
+                    applied = apply_integration_commit_step(
+                        integration_session.session_id,
+                        commit,
                     )
-                else:
-                    integration_commit_sha = str(
-                        integrated.get("baseline_sha") or ""
-                    ) or None
+                    if applied.get("ok"):
+                        integration_commit_sha = str(applied.get("head") or "") or None
+                        continue
+
+                    if not applied.get("conflict"):
+                        state = "integration_failed"
+                        errors["integration"] = str(
+                            applied.get("error", "goal integration failed")
+                        )
+                        integration_ok = False
+                        break
+
+                    integration_conflict_repairs += 1
+                    conflict_files = [
+                        str(path)
+                        for path in applied.get("conflict_files", [])
+                    ]
+                    conflict_output = str(applied.get("output", ""))
+
+                    before_activity_at = _activity_timestamp(integration_observation)
+                    send_feedback_step(
+                        integration_session.session_id,
+                        _integration_conflict_message(
+                            plan.goal,
+                            commit,
+                            conflict_files,
+                            conflict_output,
+                        ),
+                    )
+                    integration_observation = SessionObservation.model_validate(
+                        observe_step(
+                            integration_session.session_id,
+                            before_activity_at,
+                            True,
+                        )
+                    )
+
+                    if integration_observation.activity_state == "blocked":
+                        state = "blocked_human_decision_required"
+                        integration_ok = False
+                        break
+
+                    resolved = continue_integration_conflict_step(
+                        integration_session.session_id
+                    )
+                    if resolved.get("ok"):
+                        integration_commit_sha = (
+                            str(resolved.get("head") or "") or None
+                        )
+                        continue
+
+                    # One stronger attempt uses AO's existing same-worktree
+                    # provider switch; no second integration worktree is created.
+                    if (
+                        integration_target.harness != "codex"
+                        and integration_observation.activity_state
+                        in {"idle", "waiting_input"}
+                    ):
+                        codex_target = RouteTarget(
+                            harness="codex",
+                            effort="medium",
+                            reason="resolve verified goal integration conflict",
+                        )
+                        switched = AgentSwitch.model_validate(
+                            switch_agent_step(
+                                integration_session.session_id,
+                                codex_target.model_dump(),
+                                _integration_switch_idempotency_key(
+                                    plan.id,
+                                    commit,
+                                ),
+                            )
+                        )
+                        if switched.state == "completed":
+                            integration_escalations += 1
+                            integration_target = codex_target
+                            integration_observation = SessionObservation.model_validate(
+                                observe_step(integration_session.session_id)
+                            )
+
+                            if integration_observation.activity_state != "blocked":
+                                remaining_files = [
+                                    str(path)
+                                    for path in resolved.get(
+                                        "conflict_files",
+                                        conflict_files,
+                                    )
+                                ]
+                                before_activity_at = _activity_timestamp(
+                                    integration_observation
+                                )
+                                send_feedback_step(
+                                    integration_session.session_id,
+                                    _integration_conflict_message(
+                                        plan.goal,
+                                        commit,
+                                        remaining_files,
+                                        str(
+                                            resolved.get(
+                                                "error",
+                                                conflict_output,
+                                            )
+                                        ),
+                                        stronger=True,
+                                    ),
+                                )
+                                integration_observation = SessionObservation.model_validate(
+                                    observe_step(
+                                        integration_session.session_id,
+                                        before_activity_at,
+                                        True,
+                                    )
+                                )
+                                if integration_observation.activity_state != "blocked":
+                                    resolved = continue_integration_conflict_step(
+                                        integration_session.session_id
+                                    )
+
+                    if not resolved.get("ok"):
+                        abort_result = abort_integration_conflict_step(
+                            integration_session.session_id
+                        )
+                        state = "integration_conflict_unresolved"
+                        error = str(
+                            resolved.get(
+                                "error",
+                                "integration conflict remained unresolved",
+                            )
+                        )
+                        if not abort_result.get("ok"):
+                            error += (
+                                "; additionally failed to abort cherry-pick: "
+                                + str(abort_result.get("error", "unknown abort error"))
+                            )
+                        errors["integration"] = error
+                        integration_ok = False
+                        break
+
+                    integration_commit_sha = (
+                        str(resolved.get("head") or "") or None
+                    )
+
+                if integration_ok:
                     commands = discover_verification_step(
                         integration_session.session_id
                     )
@@ -669,7 +883,6 @@ def execute_goal(plan_payload: dict) -> dict:
                             else "integration_verification_failed"
                         )
         else:
-            # A fully verified no-op goal is still complete.
             state = "verified"
     elif any(
         outcome.state == "blocked_human_decision_required"
@@ -690,4 +903,6 @@ def execute_goal(plan_payload: dict) -> dict:
         integration_session=integration_session,
         integration_commit_sha=integration_commit_sha,
         integration_verification=integration_verification,
+        integration_conflict_repairs=integration_conflict_repairs,
+        integration_escalations=integration_escalations,
     ).model_dump()
