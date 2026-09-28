@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bebop-code-hub"
+version = "0.1.0"
+description = "Thin intelligence layer for routing coding tasks across existing agent orchestration infrastructure."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "dbos>=2.0,<3",
+  "httpx>=0.27,<1",
+  "pydantic>=2.12,<3",
+  "pydantic-ai-slim[groq]>=2.12,<3",
+  "grep-ast>=0.9,<1",
+  "pathspec>=0.12,<1",
+  "typer>=0.12,<1",
+  "websockets>=17,<18",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "respx>=0.21,<1",
+]
+
+[project.scripts]
+bebop = "bebop.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bebop"]
